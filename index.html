@@ -1,39 +1,69 @@
 <!DOCTYPE html>
 <html>
   <head>
-    <title>AR Letter Tracking</title>
-    <!-- Import A-Frame -->
+    <title>Urdu Calligraphy AR</title>
     <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
-    <!-- Import AR.js using a reliable CDN link -->
     <script src="https://cdn.jsdelivr.net/gh/AR-js-org/AR.js@master/aframe/build/aframe-ar.js"></script>
     <style>
       body { margin: 0; overflow: hidden; }
       .a-enter-vr { display: none; } 
+      
+      /* --- THE UI MENU --- */
+      #ui-menu {
+        position: absolute;
+        top: 20px;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 100; /* Keeps it on top of the camera */
+        background: rgba(0, 0, 0, 0.7);
+        padding: 15px;
+        border-radius: 10px;
+        display: flex;
+        gap: 10px;
+      }
+      #ui-menu button {
+        padding: 12px 20px;
+        font-size: 16px;
+        font-weight: bold;
+        background: #FF00FF;
+        color: white;
+        border: none;
+        border-radius: 5px;
+        cursor: pointer;
+      }
+      #ui-menu button:hover {
+        background: #00FFFF;
+        color: black;
+      }
     </style>
   </head>
   <body>
+    
+    <!-- THE UI BUTTONS -->
+    <div id="ui-menu">
+      <button onclick="changeLetter('Alif.png')">Alif (الف)</button>
+      <button onclick="changeLetter('Baa.png')">Baa (ب)</button>
+      <!-- You can add more buttons here later -->
+    </div>
+
     <a-scene 
       arjs="sourceType: webcam; debugUIEnabled: false; patternRatio: 0.5; trackingMethod: best;" 
       renderer="logarithmicDepthBuffer: true; colorManagement: true;"
-      vr-mode-ui="enabled: false">
+      vr-mode-ui="enabled: false"
+      embedded>
 
-      <!-- Using Hiro marker for now -->
       <a-marker preset="hiro" id="marker">
         
-        <!-- The glowing cyan line (standing straight up) -->
-        <a-entity 
-          line="start: 0, 0, 0; end: 0, 2, 0; color: #00FFFF; opacity: 0.8"
-          material="shader: standard; emissive: #00FFFF; emissiveIntensity: 2; transparent: true; opacity: 0.8">
-        </a-entity>
-
-        <!-- THE IMAGE LYING FLAT ON THE MARKER -->
+        <!-- We give the image an ID so JavaScript can change it later -->
+        <!-- Notice the opacity is now 0.5 (50%) for tracing! -->
         <a-image 
+          id="urdu-letter"
           src="Alif.png" 
           position="0 0.01 0" 
           scale="1 1 1" 
           rotation="-90 0 0"
           side="double"
-          material="transparent: true; opacity: 0.9">
+          material="transparent: true; opacity: 0.5">
         </a-image>
 
       </a-marker>
@@ -41,5 +71,20 @@
       <a-entity camera></a-entity>
 
     </a-scene>
+
+    <!-- JAVASCRIPT TO CHANGE THE LETTER -->
+    <script>
+      function changeLetter(imageName) {
+        // Find the 3D image in the scene
+        var letterEl = document.querySelector('#urdu-letter');
+        
+        // Change the source image to the new letter
+        letterEl.setAttribute('src', imageName);
+        
+        // Make sure it stays at 50% opacity
+        letterEl.setAttribute('material', 'transparent: true; opacity: 0.5');
+      }
+    </script>
+
   </body>
 </html>
