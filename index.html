@@ -67,6 +67,7 @@
       .preset-btns button.active { background: #007bff; color: white; border-color: #007bff; }
       .continue-btn { background: #007bff; color: white; width: 100%; padding: 12px; border: none; border-radius: 8px; font-weight: bold; font-size: 16px; cursor: pointer; margin-top: 10px;}
       input[type=range] { width: 100%; cursor: pointer; }
+            .a-canvas { z-index: 0 !important; } /* Forces the 3D camera to stay behind the UI */
     </style>
   </head>
   <body>
@@ -184,14 +185,22 @@
       // Apply settings to the 3D object
       function applySettings() {
         let letterEl = document.querySelector('#urdu-letter');
-        letterEl.setAttribute('scale', currentZoom + ' ' + currentZoom + ' 1');
-        letterEl.setAttribute('material', 'transparent: true; opacity: ' + currentOpacity);
+        if (letterEl) {
+          letterEl.setAttribute('scale', currentZoom + ' ' + currentZoom + ' 1');
+          letterEl.setAttribute('material', 'transparent: true; opacity: ' + currentOpacity);
+        }
       }
 
-      // Home Screen Logic (Now just hides/shows the overlay)
+      // Home Screen Logic
       function selectLetter(filename) {
-        document.querySelector('#urdu-letter').setAttribute('src', filename);
+        // 1. HIDE THE SCREEN FIRST! This guarantees the UI reacts instantly.
         document.querySelector('#home-screen').style.display = 'none';
+        
+        // 2. Then safely update the 3D model.
+        let letterEl = document.querySelector('#urdu-letter');
+        if (letterEl) {
+          letterEl.setAttribute('src', filename);
+        }
       }
 
       function goHome() {
