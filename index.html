@@ -17,15 +17,16 @@
       renderer="logarithmicDepthBuffer: true; colorManagement: true;"
       vr-mode-ui="enabled: false">
 
+      <!-- Using Hiro marker for now -->
       <a-marker preset="hiro" id="marker">
         
-        <!-- The glowing cyan line -->
+        <!-- The glowing cyan line (standing straight up) -->
         <a-entity 
           line="start: 0, 0, 0; end: 0, 2, 0; color: #00FFFF; opacity: 0.8"
           material="shader: standard; emissive: #00FFFF; emissiveIntensity: 2; transparent: true; opacity: 0.8">
         </a-entity>
-        
-     <!-- THE IMAGE LYING FLAT ON THE MARKER -->
+
+        <!-- THE IMAGE LYING FLAT ON THE MARKER -->
         <a-image 
           src="Alif.png" 
           position="0 0.01 0" 
