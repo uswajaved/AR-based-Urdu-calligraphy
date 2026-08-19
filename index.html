@@ -28,14 +28,27 @@
       }
       .letter-box:hover { background: #ddd; }
 
-      /* --- AR VIEW & BOTTOM NAV --- */
+      /* --- AR VIEW & NAVIGATION --- */
       #ar-view { display: none; width: 100%; height: 100%; }
+      
+      /* Top Tabs in AR View */
+      #top-nav {
+        position: absolute; top: 15px; left: 50%; transform: translateX(-50%);
+        z-index: 50; background: rgba(255,255,255,0.9); padding: 10px 20px;
+        border-radius: 30px; display: flex; gap: 20px; font-weight: bold;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+      }
+      #top-nav span { color: #999; cursor: pointer; }
+      #top-nav span.active { color: #007bff; border-bottom: 2px solid #007bff; }
+
+      /* Bottom Nav in AR View */
       #bottom-nav {
-        position: absolute; bottom: 0; left: 0; width: 100%; height: 60px;
-        background: rgba(255,255,255,0.9); display: flex; justify-content: space-around;
+        position: absolute; bottom: 0; left: 0; width: 100%; height: 70px;
+        background: rgba(255,255,255,0.95); display: flex; justify-content: space-around;
         align-items: center; z-index: 50; border-top: 1px solid #ccc;
       }
-      .nav-btn { background: none; border: none; font-weight: bold; cursor: pointer; color: #333; font-size: 14px; }
+      .nav-btn { background: none; border: none; cursor: pointer; display: flex; flex-direction: column; align-items: center; }
+      .nav-icon { width: 28px; height: 28px; object-fit: contain; }
 
       /* --- MODALS (Popups) --- */
       .modal-overlay {
@@ -53,13 +66,6 @@
       .preset-btns button { padding: 8px 16px; border: 1px solid #ddd; background: white; border-radius: 6px; cursor: pointer; font-weight: bold;}
       .preset-btns button.active { background: #007bff; color: white; border-color: #007bff; }
       .continue-btn { background: #007bff; color: white; width: 100%; padding: 12px; border: none; border-radius: 8px; font-weight: bold; font-size: 16px; cursor: pointer; margin-top: 10px;}
-      
-      /* Color Picker specific */
-      .color-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin: 20px 0; }
-      .color-circle { width: 40px; height: 40px; border-radius: 50%; cursor: pointer; border: 2px solid transparent; margin: auto; }
-      .color-circle.selected { border-color: #333; }
-
-      /* Slider styling */
       input[type=range] { width: 100%; cursor: pointer; }
     </style>
   </head>
@@ -73,7 +79,7 @@
         <span>WORDS</span>
       </div>
       <div class="letter-grid">
-        <!-- We use onclick="selectLetter('FileName.png')" -->
+        <!-- To add more letters, just copy one of these lines and change the filename and the character -->
         <div class="letter-box" onclick="selectLetter('Alif.png')">ا</div>
         <div class="letter-box" onclick="selectLetter('Baa.png')">ب</div>
         <div class="letter-box" onclick="selectLetter('Taa.png')">ت</div>
@@ -82,14 +88,16 @@
         <div class="letter-box" onclick="selectLetter('Haa.png')">ح</div>
         <div class="letter-box" onclick="selectLetter('Khaa.png')">خ</div>
         <div class="letter-box" onclick="selectLetter('Daal.png')">د</div>
-        <div class="letter-box">ذ</div>
-        <div class="letter-box">ر</div>
-        <div class="letter-box">ز</div>
-        <div class="letter-box">س</div>
-        <div class="letter-box">ش</div>
-        <div class="letter-box">ص</div>
-        <div class="letter-box">ض</div>
-        <div class="letter-box">ط</div>
+        
+        <!-- Example of adding more letters (Make sure the PNGs are uploaded to GitHub) -->
+        <div class="letter-box" onclick="selectLetter('Zaal.png')">ذ</div>
+        <div class="letter-box" onclick="selectLetter('Raa.png')">ر</div>
+        <div class="letter-box" onclick="selectLetter('Zaa.png')">ز</div>
+        <div class="letter-box" onclick="selectLetter('Seen.png')">س</div>
+        <div class="letter-box" onclick="selectLetter('Sheen.png')">ش</div>
+        <div class="letter-box" onclick="selectLetter('Saad.png')">ص</div>
+        <div class="letter-box" onclick="selectLetter('Daad.png')">ض</div>
+        <div class="letter-box" onclick="selectLetter('Toa.png')">ط</div>
       </div>
     </div>
 
@@ -101,7 +109,8 @@
         vr-mode-ui="enabled: false"
         embedded>
 
-        <a-marker preset="hiro" id="marker">
+        <!-- Updated Custom Marker -->
+        <a-marker type="pattern" url="pattern-marker-image-with-logo.patt" id="marker">
           <a-image 
             id="urdu-letter"
             src="Alif.png" 
@@ -109,19 +118,34 @@
             scale="1 1 1" 
             rotation="-90 0 0"
             side="double"
-            material="transparent: true; opacity: 0.5; color: #ffffff">
+            material="transparent: true; opacity: 0.5;">
           </a-image>
         </a-marker>
 
         <a-entity camera></a-entity>
       </a-scene>
 
-      <!-- Bottom Navigation -->
+      <!-- Top Navigation Tabs (Shown in AR View) -->
+      <div id="top-nav">
+        <span class="active" onclick="goHome()">HOME</span>
+        <span onclick="alert('Letters tab clicked!')">LETTERS</span>
+        <span onclick="alert('Words tab clicked!')">WORDS</span>
+      </div>
+
+      <!-- Bottom Navigation with Icons -->
       <div id="bottom-nav">
-        <button class="nav-btn" onclick="goHome()">HOME</button>
-        <button class="nav-btn" onclick="openModal('zoom-modal')">ZOOM</button>
-        <button class="nav-btn" onclick="openModal('color-modal')">COLOR</button>
-        <button class="nav-btn" onclick="openModal('opacity-modal')">OPACITY</button>
+        <button class="nav-btn" onclick="goHome()">
+          <img src="Home.svg" class="nav-icon">
+        </button>
+        <button class="nav-btn" onclick="openModal('zoom-modal')">
+          <img src="Zoom.svg" class="nav-icon">
+        </button>
+        <button class="nav-btn" onclick="openModal('opacity-modal')">
+          <img src="Opacity.svg" class="nav-icon">
+        </button>
+        <button class="nav-btn" onclick="alert('Color skipped')">
+          <img src="Color.svg" class="nav-icon">
+        </button>
       </div>
     </div>
 
@@ -140,25 +164,6 @@
           <button onclick="setZoom(2.5)">2.5x</button>
         </div>
         <button class="continue-btn" onclick="closeModal('zoom-modal')">CONTINUE</button>
-      </div>
-    </div>
-
-    <!-- COLOR MODAL -->
-    <div class="modal-overlay" id="color-modal">
-      <div class="modal-card">
-        <span class="close-x" onclick="closeModal('color-modal')">&times;</span>
-        <div class="modal-title">Choose a color</div>
-        <div class="color-grid">
-          <div class="color-circle" style="background: #000000;" onclick="setColor('#000000')"></div>
-          <div class="color-circle" style="background: #FF0000;" onclick="setColor('#FF0000')"></div>
-          <div class="color-circle" style="background: #0000FF;" onclick="setColor('#0000FF')"></div>
-          <div class="color-circle" style="background: #008000;" onclick="setColor('#008000')"></div>
-          <div class="color-circle" style="background: #FFA500;" onclick="setColor('#FFA500')"></div>
-          <div class="color-circle" style="background: #800080;" onclick="setColor('#800080')"></div>
-          <div class="color-circle" style="background: #FFC0CB;" onclick="setColor('#FFC0CB')"></div>
-          <div class="color-circle" style="background: #FFFFFF; border: 1px solid #ccc;" onclick="setColor('#FFFFFF')"></div>
-        </div>
-        <button class="continue-btn" onclick="closeModal('color-modal')">CONTINUE</button>
       </div>
     </div>
 
@@ -182,13 +187,12 @@
     <script>
       let currentZoom = 1;
       let currentOpacity = 0.5;
-      let currentColor = '#ffffff';
 
       // Apply settings to the 3D object
       function applySettings() {
         let letterEl = document.querySelector('#urdu-letter');
         letterEl.setAttribute('scale', currentZoom + ' ' + currentZoom + ' 1');
-        letterEl.setAttribute('material', 'transparent: true; opacity: ' + currentOpacity + '; color: ' + currentColor);
+        letterEl.setAttribute('material', 'transparent: true; opacity: ' + currentOpacity);
       }
 
       // Home Screen Logic
@@ -222,15 +226,6 @@
       function setOpacity(val) {
         currentOpacity = val;
         document.getElementById('opacity-slider').value = val;
-      }
-
-      // Color Logic
-      function setColor(hex) {
-        currentColor = hex;
-        // Highlight selected circle
-        let circles = document.querySelectorAll('.color-circle');
-        circles.forEach(c => c.classList.remove('selected'));
-        event.target.classList.add('selected');
       }
     </script>
 
