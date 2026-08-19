@@ -2,45 +2,41 @@
 <html>
   <head>
     <title>AR Letter Tracking</title>
-    <!-- Import A-Frame (our Three.js wrapper) -->
+    <!-- Import A-Frame -->
     <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
-    <!-- Import AR.js (handles the WebXR camera tracking) -->
-    <script src="https://raw.githack.com/AR-js-org/AR.js/master/aframe/build/aframe-ar.js"></script>
+    <!-- Import AR.js using a reliable CDN link -->
+    <script src="https://cdn.jsdelivr.net/gh/AR-js-org/AR.js@master/aframe/build/aframe-ar.js"></script>
     <style>
       body { margin: 0; overflow: hidden; }
-      .a-enter-vr { display: none; } /* Hide default AR button */
+      .a-enter-vr { display: none; } 
     </style>
   </head>
   <body>
-    <!-- THE MOVIE SET (a-scene) -->
     <a-scene 
-      arjs="sourceType: webcam; debugUIEnabled: false; patternRatio: 0.5;" 
+      arjs="sourceType: webcam; debugUIEnabled: false; patternRatio: 0.5; trackingMethod: best;" 
       renderer="logarithmicDepthBuffer: true; colorManagement: true;"
       vr-mode-ui="enabled: false">
 
-      <!-- THE OVERLAY MATH ENGINE (a-marker) -->
-      <!-- AR.js scans for the 'hiro' pattern. When found, this entity becomes the 0,0,0 origin -->
       <a-marker preset="hiro" id="marker">
         
-        <!-- The glowing line goes from the center of the paper straight up -->
+        <!-- The glowing cyan line -->
         <a-entity 
           line="start: 0, 0, 0; end: 0, 2, 0; color: #00FFFF; opacity: 0.8"
           material="shader: standard; emissive: #00FFFF; emissiveIntensity: 2; transparent: true; opacity: 0.8">
         </a-entity>
 
-        <!-- The glowing letter sits on top of the line -->
+        <!-- The letter 'A' (Fixed: removed conflicting material, made it bigger and double-sided) -->
         <a-text 
           value="A" 
           color="#FF00FF" 
           align="center" 
           position="0 2.2 0" 
-          scale="2 2 2"
-          material="shader: standard; emissive: #FF00FF; emissiveIntensity: 1.5; transparent: true; opacity: 0.9">
+          scale="3 3 3" 
+          side="double">
         </a-text>
 
       </a-marker>
 
-      <!-- THE CAMERAMAN (a-entity camera) -->
       <a-entity camera></a-entity>
 
     </a-scene>
