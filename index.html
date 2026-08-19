@@ -8,7 +8,7 @@
       body { margin: 0; overflow: hidden; font-family: sans-serif; }
       .a-enter-vr { display: none; } 
 
-      /* --- HOME SCREEN --- */
+      /* --- HOME SCREEN (Now acts as an overlay on top of the camera) --- */
       #home-screen {
         position: absolute; top: 0; left: 0; width: 100%; height: 100%;
         background: white; z-index: 200; display: flex; flex-direction: column;
@@ -29,7 +29,7 @@
       .letter-box:hover { background: #ddd; }
 
       /* --- AR VIEW & NAVIGATION --- */
-      #ar-view { display: none; width: 100%; height: 100%; }
+      #ar-view { width: 100%; height: 100%; }
       
       /* Top Tabs in AR View */
       #top-nav {
@@ -71,37 +71,7 @@
   </head>
   <body>
     
-    <!-- 1. HOME SCREEN -->
-    <div id="home-screen">
-      <div class="tab-header">
-        <span class="active">HOME</span>
-        <span>LETTERS</span>
-        <span>WORDS</span>
-      </div>
-      <div class="letter-grid">
-        <!-- To add more letters, just copy one of these lines and change the filename and the character -->
-        <div class="letter-box" onclick="selectLetter('Alif.png')">ا</div>
-        <div class="letter-box" onclick="selectLetter('Baa.png')">ب</div>
-        <div class="letter-box" onclick="selectLetter('Taa.png')">ت</div>
-        <div class="letter-box" onclick="selectLetter('Thaa.png')">ث</div>
-        <div class="letter-box" onclick="selectLetter('Jeem.png')">ج</div>
-        <div class="letter-box" onclick="selectLetter('Haa.png')">ح</div>
-        <div class="letter-box" onclick="selectLetter('Khaa.png')">خ</div>
-        <div class="letter-box" onclick="selectLetter('Daal.png')">د</div>
-        
-        <!-- Example of adding more letters (Make sure the PNGs are uploaded to GitHub) -->
-        <div class="letter-box" onclick="selectLetter('Zaal.png')">ذ</div>
-        <div class="letter-box" onclick="selectLetter('Raa.png')">ر</div>
-        <div class="letter-box" onclick="selectLetter('Zaa.png')">ز</div>
-        <div class="letter-box" onclick="selectLetter('Seen.png')">س</div>
-        <div class="letter-box" onclick="selectLetter('Sheen.png')">ش</div>
-        <div class="letter-box" onclick="selectLetter('Saad.png')">ص</div>
-        <div class="letter-box" onclick="selectLetter('Daad.png')">ض</div>
-        <div class="letter-box" onclick="selectLetter('Toa.png')">ط</div>
-      </div>
-    </div>
-
-    <!-- 2. AR VIEW -->
+    <!-- 1. AR VIEW (Runs in the background) -->
     <div id="ar-view">
       <a-scene 
         arjs="sourceType: webcam; debugUIEnabled: false; patternRatio: 0.5; trackingMethod: best;" 
@@ -109,12 +79,22 @@
         vr-mode-ui="enabled: false"
         embedded>
 
-       <a-marker preset="hiro" id="marker">
+        <a-marker type="pattern" url="pattern-marker-image-with-logo.patt" id="marker">
+          <a-image 
+            id="urdu-letter"
+            src="Alif.png" 
+            position="0 0.01 0" 
+            scale="1 1 1" 
+            rotation="-90 0 0"
+            side="double"
+            material="transparent: true; opacity: 0.5;">
+          </a-image>
+        </a-marker>
 
         <a-entity camera></a-entity>
       </a-scene>
 
-      <!-- Top Navigation Tabs (Shown in AR View) -->
+      <!-- Top Navigation Tabs -->
       <div id="top-nav">
         <span class="active" onclick="goHome()">HOME</span>
         <span onclick="alert('Letters tab clicked!')">LETTERS</span>
@@ -138,9 +118,34 @@
       </div>
     </div>
 
-    <!-- 3. MODALS (Popups) -->
+    <!-- 2. HOME SCREEN (Overlay on top) -->
+    <div id="home-screen">
+      <div class="tab-header">
+        <span class="active">HOME</span>
+        <span>LETTERS</span>
+        <span>WORDS</span>
+      </div>
+      <div class="letter-grid">
+        <div class="letter-box" onclick="selectLetter('Alif.png')">ا</div>
+        <div class="letter-box" onclick="selectLetter('Baa.png')">ب</div>
+        <div class="letter-box" onclick="selectLetter('Taa.png')">ت</div>
+        <div class="letter-box" onclick="selectLetter('Thaa.png')">ث</div>
+        <div class="letter-box" onclick="selectLetter('Jeem.png')">ج</div>
+        <div class="letter-box" onclick="selectLetter('Haa.png')">ح</div>
+        <div class="letter-box" onclick="selectLetter('Khaa.png')">خ</div>
+        <div class="letter-box" onclick="selectLetter('Daal.png')">د</div>
+        <div class="letter-box" onclick="selectLetter('Zaal.png')">ذ</div>
+        <div class="letter-box" onclick="selectLetter('Raa.png')">ر</div>
+        <div class="letter-box" onclick="selectLetter('Zaa.png')">ز</div>
+        <div class="letter-box" onclick="selectLetter('Seen.png')">س</div>
+        <div class="letter-box" onclick="selectLetter('Sheen.png')">ش</div>
+        <div class="letter-box" onclick="selectLetter('Saad.png')">ص</div>
+        <div class="letter-box" onclick="selectLetter('Daad.png')">ض</div>
+        <div class="letter-box" onclick="selectLetter('Toa.png')">ط</div>
+      </div>
+    </div>
 
-    <!-- ZOOM MODAL -->
+    <!-- 3. MODALS (Popups) -->
     <div class="modal-overlay" id="zoom-modal">
       <div class="modal-card">
         <span class="close-x" onclick="closeModal('zoom-modal')">&times;</span>
@@ -156,7 +161,6 @@
       </div>
     </div>
 
-    <!-- OPACITY MODAL -->
     <div class="modal-overlay" id="opacity-modal">
       <div class="modal-card">
         <span class="close-x" onclick="closeModal('opacity-modal')">&times;</span>
@@ -184,15 +188,13 @@
         letterEl.setAttribute('material', 'transparent: true; opacity: ' + currentOpacity);
       }
 
-      // Home Screen Logic
+      // Home Screen Logic (Now just hides/shows the overlay)
       function selectLetter(filename) {
         document.querySelector('#urdu-letter').setAttribute('src', filename);
         document.querySelector('#home-screen').style.display = 'none';
-        document.querySelector('#ar-view').style.display = 'block';
       }
 
       function goHome() {
-        document.querySelector('#ar-view').style.display = 'none';
         document.querySelector('#home-screen').style.display = 'flex';
       }
 
