@@ -128,6 +128,7 @@
       <span onclick="alert('Words tab clicked!')">WORDS</span>
     </div>
 
+    <!-- Bottom Navigation (Color Icon Removed) -->
     <div id="bottom-nav">
       <button class="nav-btn" onclick="goHome()">
         <img src="Home.svg" class="nav-icon">
@@ -138,11 +139,9 @@
       <button class="nav-btn" onclick="openModal('opacity-modal')">
         <img src="Opacity.svg" class="nav-icon">
       </button>
-      <button class="nav-btn" onclick="alert('Color skipped')">
-        <img src="Color.svg" class="nav-icon">
-      </button>
     </div>
 
+    <!-- Modals -->
     <div class="modal-overlay" id="zoom-modal">
       <div class="modal-card">
         <span class="close-x" onclick="closeModal('zoom-modal')">&times;</span>
@@ -190,6 +189,11 @@
         document.querySelector('#home-screen').style.display = 'none';
         document.querySelector('#top-nav').style.display = 'flex';
         document.querySelector('#bottom-nav').style.display = 'flex';
+        
+        let letterEl = document.querySelector('#urdu-letter');
+        if (letterEl) {
+          letterEl.setAttribute('src', filename);
+        }
       }
 
       function goHome() {
