@@ -21,6 +21,8 @@
       .letter-grid {
         display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px;
         width: 90%; max-width: 400px;
+        /* RTL so the grid reads right-to-left, top-right first, like Urdu */
+        direction: rtl;
       }
       .letter-box {
         background: #f0f0f0; aspect-ratio: 1; display: flex; align-items: center;
@@ -118,8 +120,8 @@
         <img id="alif-img" src="Alif.png" crossorigin="anonymous">
       </a-assets>
 
-      <!-- Using Hiro marker for now -->
-      <a-marker preset="hiro" id="marker">
+      <!-- Custom pattern marker (pattern-a4-3.patt), hosted alongside this file on GitHub -->
+      <a-marker type="pattern" url="pattern-a4-3.patt" id="marker">
         <a-image 
           id="urdu-letter"
           src="#alif-img" 
@@ -144,20 +146,43 @@
       <div class="letter-grid">
         <div class="letter-box" onclick="selectLetter('Alif.png', 'ا')">ا</div>
         <div class="letter-box" onclick="selectLetter('Baa.png', 'ب')">ب</div>
+        <div class="letter-box" onclick="selectLetter('Peh.png', 'پ')">پ</div>
         <div class="letter-box" onclick="selectLetter('Taa.png', 'ت')">ت</div>
+        <div class="letter-box" onclick="selectLetter('Tay.png', 'ٹ')">ٹ</div>
         <div class="letter-box" onclick="selectLetter('Thaa.png', 'ث')">ث</div>
         <div class="letter-box" onclick="selectLetter('Jeem.png', 'ج')">ج</div>
+        <div class="letter-box" onclick="selectLetter('Cheh.png', 'چ')">چ</div>
         <div class="letter-box" onclick="selectLetter('Haa.png', 'ح')">ح</div>
         <div class="letter-box" onclick="selectLetter('Khaa.png', 'خ')">خ</div>
         <div class="letter-box" onclick="selectLetter('Daal.png', 'د')">د</div>
+        <div class="letter-box" onclick="selectLetter('Ddal.png', 'ڈ')">ڈ</div>
         <div class="letter-box" onclick="selectLetter('Zaal.png', 'ذ')">ذ</div>
         <div class="letter-box" onclick="selectLetter('Raa.png', 'ر')">ر</div>
+        <div class="letter-box" onclick="selectLetter('Rreh.png', 'ڑ')">ڑ</div>
         <div class="letter-box" onclick="selectLetter('Zaa.png', 'ز')">ز</div>
+        <div class="letter-box" onclick="selectLetter('Zheh.png', 'ژ')">ژ</div>
         <div class="letter-box" onclick="selectLetter('Seen.png', 'س')">س</div>
         <div class="letter-box" onclick="selectLetter('Sheen.png', 'ش')">ش</div>
         <div class="letter-box" onclick="selectLetter('Saad.png', 'ص')">ص</div>
         <div class="letter-box" onclick="selectLetter('Daad.png', 'ض')">ض</div>
         <div class="letter-box" onclick="selectLetter('Toa.png', 'ط')">ط</div>
+        <div class="letter-box" onclick="selectLetter('Zoe.png', 'ظ')">ظ</div>
+        <div class="letter-box" onclick="selectLetter('Ain.png', 'ع')">ع</div>
+        <div class="letter-box" onclick="selectLetter('Ghain.png', 'غ')">غ</div>
+        <div class="letter-box" onclick="selectLetter('Feh.png', 'ف')">ف</div>
+        <div class="letter-box" onclick="selectLetter('Qaf.png', 'ق')">ق</div>
+        <div class="letter-box" onclick="selectLetter('Kaf.png', 'ک')">ک</div>
+        <div class="letter-box" onclick="selectLetter('Gaf.png', 'گ')">گ</div>
+        <div class="letter-box" onclick="selectLetter('Lam.png', 'ل')">ل</div>
+        <div class="letter-box" onclick="selectLetter('Meem.png', 'م')">م</div>
+        <div class="letter-box" onclick="selectLetter('Noon.png', 'ن')">ن</div>
+        <div class="letter-box" onclick="selectLetter('NoonGhunna.png', 'ں')">ں</div>
+        <div class="letter-box" onclick="selectLetter('Wao.png', 'و')">و</div>
+        <div class="letter-box" onclick="selectLetter('Heh.png', 'ہ')">ہ</div>
+        <div class="letter-box" onclick="selectLetter('DoChashmiHeh.png', 'ھ')">ھ</div>
+        <div class="letter-box" onclick="selectLetter('Hamza.png', 'ء')">ء</div>
+        <div class="letter-box" onclick="selectLetter('Yeh.png', 'ی')">ی</div>
+        <div class="letter-box" onclick="selectLetter('BariYeh.png', 'ے')">ے</div>
       </div>
     </div>
 
@@ -169,20 +194,43 @@
       <div class="letter-scroller" id="letter-scroller">
         <div class="nav-letter active" onclick="changeLetterNav('Alif.png', this)">ا</div>
         <div class="nav-letter" onclick="changeLetterNav('Baa.png', this)">ب</div>
+        <div class="nav-letter" onclick="changeLetterNav('Peh.png', this)">پ</div>
         <div class="nav-letter" onclick="changeLetterNav('Taa.png', this)">ت</div>
+        <div class="nav-letter" onclick="changeLetterNav('Tay.png', this)">ٹ</div>
         <div class="nav-letter" onclick="changeLetterNav('Thaa.png', this)">ث</div>
         <div class="nav-letter" onclick="changeLetterNav('Jeem.png', this)">ج</div>
+        <div class="nav-letter" onclick="changeLetterNav('Cheh.png', this)">چ</div>
         <div class="nav-letter" onclick="changeLetterNav('Haa.png', this)">ح</div>
         <div class="nav-letter" onclick="changeLetterNav('Khaa.png', this)">خ</div>
         <div class="nav-letter" onclick="changeLetterNav('Daal.png', this)">د</div>
+        <div class="nav-letter" onclick="changeLetterNav('Ddal.png', this)">ڈ</div>
         <div class="nav-letter" onclick="changeLetterNav('Zaal.png', this)">ذ</div>
         <div class="nav-letter" onclick="changeLetterNav('Raa.png', this)">ر</div>
+        <div class="nav-letter" onclick="changeLetterNav('Rreh.png', this)">ڑ</div>
         <div class="nav-letter" onclick="changeLetterNav('Zaa.png', this)">ز</div>
+        <div class="nav-letter" onclick="changeLetterNav('Zheh.png', this)">ژ</div>
         <div class="nav-letter" onclick="changeLetterNav('Seen.png', this)">س</div>
         <div class="nav-letter" onclick="changeLetterNav('Sheen.png', this)">ش</div>
         <div class="nav-letter" onclick="changeLetterNav('Saad.png', this)">ص</div>
         <div class="nav-letter" onclick="changeLetterNav('Daad.png', this)">ض</div>
         <div class="nav-letter" onclick="changeLetterNav('Toa.png', this)">ط</div>
+        <div class="nav-letter" onclick="changeLetterNav('Zoe.png', this)">ظ</div>
+        <div class="nav-letter" onclick="changeLetterNav('Ain.png', this)">ع</div>
+        <div class="nav-letter" onclick="changeLetterNav('Ghain.png', this)">غ</div>
+        <div class="nav-letter" onclick="changeLetterNav('Feh.png', this)">ف</div>
+        <div class="nav-letter" onclick="changeLetterNav('Qaf.png', this)">ق</div>
+        <div class="nav-letter" onclick="changeLetterNav('Kaf.png', this)">ک</div>
+        <div class="nav-letter" onclick="changeLetterNav('Gaf.png', this)">گ</div>
+        <div class="nav-letter" onclick="changeLetterNav('Lam.png', this)">ل</div>
+        <div class="nav-letter" onclick="changeLetterNav('Meem.png', this)">م</div>
+        <div class="nav-letter" onclick="changeLetterNav('Noon.png', this)">ن</div>
+        <div class="nav-letter" onclick="changeLetterNav('NoonGhunna.png', this)">ں</div>
+        <div class="nav-letter" onclick="changeLetterNav('Wao.png', this)">و</div>
+        <div class="nav-letter" onclick="changeLetterNav('Heh.png', this)">ہ</div>
+        <div class="nav-letter" onclick="changeLetterNav('DoChashmiHeh.png', this)">ھ</div>
+        <div class="nav-letter" onclick="changeLetterNav('Hamza.png', this)">ء</div>
+        <div class="nav-letter" onclick="changeLetterNav('Yeh.png', this)">ی</div>
+        <div class="nav-letter" onclick="changeLetterNav('BariYeh.png', this)">ے</div>
       </div>
       <button class="chevron" onclick="scrollNav(150)">&#10095;</button>
     </div>
