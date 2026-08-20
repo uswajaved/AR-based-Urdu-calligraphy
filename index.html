@@ -30,30 +30,51 @@
       .letter-box:hover { background: #ddd; }
 
       /* --- AR VIEW NAVIGATION --- */
-      
-      /* Top Nav (Horizontal Scroller) */
+
+      /* Top Nav (Horizontal Scroller made of letter-box cards) */
       #top-nav {
-        position: fixed; top: 15px; left: 0; width: 100%; height: 60px;
+        position: fixed; top: 15px; left: 0; width: 100%; height: 70px;
         z-index: 50; display: none; align-items: center; justify-content: center;
+        gap: 10px;
       }
       .chevron {
-        background: rgba(255,255,255,0.9); border: none; width: 35px; height: 35px;
-        border-radius: 50%; font-size: 18px; cursor: pointer; z-index: 10;
-        box-shadow: 0 2px 5px rgba(0,0,0,0.2); color: #007bff; font-weight: bold;
+        background: rgba(0,0,0,0.85); border: none; width: 36px; height: 36px;
+        border-radius: 50%; font-size: 16px; cursor: pointer; z-index: 10;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.3); color: #fff; font-weight: bold;
+        flex-shrink: 0; display: flex; align-items: center; justify-content: center;
+        padding: 0;
       }
+      .chevron:active { background: rgba(0,0,0,1); }
+
       .letter-scroller {
-        display: flex; gap: 20px; overflow-x: auto; scroll-behavior: smooth;
-        background: rgba(255,255,255,0.9); padding: 10px 15px; margin: 0 10px;
-        border-radius: 20px; width: 250px; box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        display: flex; gap: 12px; overflow-x: auto; scroll-behavior: smooth;
+        -webkit-overflow-scrolling: touch; touch-action: pan-x;
+        scroll-snap-type: x proximity;
+        max-width: 260px; padding: 4px 2px;
+        /* RTL so Alif (first in the list) anchors on the right, and later
+           letters extend to the left — matching Urdu reading direction */
+        direction: rtl;
         /* Hide scrollbar for cleaner look */
         -ms-overflow-style: none; scrollbar-width: none;
       }
       .letter-scroller::-webkit-scrollbar { display: none; }
+
       .nav-letter {
-        font-size: 24px; cursor: pointer; color: #999; font-weight: bold;
-        border-bottom: 2px solid transparent; padding-bottom: 2px;
+        direction: ltr; /* keep each glyph rendering normally */
+        flex-shrink: 0; scroll-snap-align: center;
+        width: 54px; height: 54px;
+        background: #f0f0f0; border-radius: 10px;
+        display: flex; align-items: center; justify-content: center;
+        font-size: 26px; font-weight: bold; color: black;
+        cursor: pointer; user-select: none;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+        transition: background 0.15s, color 0.15s, transform 0.15s;
       }
-      .nav-letter.active { color: #007bff; border-color: #007bff; }
+      .nav-letter.active {
+        background: #007bff; color: #fff;
+        box-shadow: 0 2px 8px rgba(0,123,255,0.4);
+        transform: scale(1.05);
+      }
 
       /* Bottom Nav (Icons + Text) */
       #bottom-nav {
@@ -141,12 +162,11 @@
     </div>
 
     <!-- 3. AR NAVIGATION -->
-    
-    <!-- Top Nav (Scroller) -->
+
+    <!-- Top Nav (Scroller made of letter-box cards) -->
     <div id="top-nav">
       <button class="chevron" onclick="scrollNav(-150)">&#10094;</button>
       <div class="letter-scroller" id="letter-scroller">
-        <!-- These will be highlighted blue when clicked -->
         <div class="nav-letter active" onclick="changeLetterNav('Alif.png', this)">ا</div>
         <div class="nav-letter" onclick="changeLetterNav('Baa.png', this)">ب</div>
         <div class="nav-letter" onclick="changeLetterNav('Taa.png', this)">ت</div>
@@ -260,6 +280,7 @@
         // Remove active from all, add to clicked
         document.querySelectorAll('.nav-letter').forEach(el => el.classList.remove('active'));
         element.classList.add('active');
+        element.scrollIntoView({behavior: "smooth", inline: "center", block: "nearest"});
       }
 
       // Chevron scroll buttons
@@ -290,6 +311,27 @@
         currentOpacity = val;
         document.getElementById('opacity-slider').value = val;
       }
+
+      // --- Enable mouse-drag scrolling on desktop for the letter scroller
+      // (touch devices already scroll natively via overflow-x + touch-action)
+      (function enableDragScroll() {
+        const scroller = document.getElementById('letter-scroller');
+        let isDown = false, startX, scrollLeft;
+
+        scroller.addEventListener('mousedown', (e) => {
+          isDown = true;
+          startX = e.pageX - scroller.offsetLeft;
+          scrollLeft = scroller.scrollLeft;
+        });
+        window.addEventListener('mouseup', () => { isDown = false; });
+        window.addEventListener('mousemove', (e) => {
+          if (!isDown) return;
+          e.preventDefault();
+          const x = e.pageX - scroller.offsetLeft;
+          const walk = (x - startX) * 1.2;
+          scroller.scrollLeft = scrollLeft - walk;
+        });
+      })();
     </script>
 
   </body>
