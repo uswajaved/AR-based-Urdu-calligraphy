@@ -26,7 +26,6 @@
         justify-content: center; font-size: 32px; cursor: pointer; border-radius: 8px;
         color: black; font-weight: bold;
       }
-      .letter-box:hover { background: #ddd; }
 
       /* --- AR VIEW NAVIGATION --- */
       #top-nav {
@@ -36,8 +35,7 @@
       .chevron {
         background: rgba(0,0,0,0.85); border: none; width: 36px; height: 36px;
         border-radius: 50%; font-size: 16px; cursor: pointer; z-index: 10;
-        box-shadow: 0 2px 6px rgba(0,0,0,0.3); color: #fff; font-weight: bold;
-        flex-shrink: 0; display: flex; align-items: center; justify-content: center; padding: 0;
+        color: #fff; font-weight: bold; flex-shrink: 0; display: flex; align-items: center; justify-content: center; padding: 0;
       }
       .letter-scroller {
         display: flex; gap: 12px; overflow-x: auto; scroll-behavior: smooth;
@@ -62,11 +60,11 @@
       .nav-btn span { font-size: 11px; font-weight: bold; color: #333; }
       .nav-icon { width: 28px; height: 28px; object-fit: contain; }
 
-      /* The "Place Letter" Button */
-      #place-btn {
-        position: fixed; bottom: 100px; left: 50%; transform: translateX(-50%);
+      /* The Buttons */
+      .ar-btn {
+        position: fixed; bottom: 120px; left: 50%; transform: translateX(-50%);
         background: #007bff; color: white; border: none; padding: 15px 30px;
-        border-radius: 30px; font-size: 16px; font-weight: bold; z-index: 50;
+        border-radius: 30px; font-size: 16px; font-weight: bold; z-index: 60;
         display: none; box-shadow: 0 4px 10px rgba(0,123,255,0.4);
       }
 
@@ -80,12 +78,48 @@
       .continue-btn { background: #007bff; color: white; width: 100%; padding: 12px; border: none; border-radius: 8px; font-weight: bold; font-size: 16px; cursor: pointer; margin-top: 10px;}
       input[type=range] { width: 100%; cursor: pointer; accent-color: #007bff; }
     </style>
+
+    <!-- WEBXR SLAM HIT-TEST SCRIPT -->
+    <script>
+      AFRAME.registerComponent('ar-hit-test', {
+        init: function () {
+          this.el.sceneEl.addEventListener('enter-vr', () => {
+            if (!this.el.sceneEl.is('ar-mode')) return;
+            const renderer = this.el.sceneEl.renderer;
+            const xr = renderer.xr;
+            this.hitTestSource = null;
+            xr.getSession().requestReferenceSpace('local-floor').then((referenceSpace) => {
+              xr.getSession().requestHitTestSource({ space: referenceSpace }).then((hitTestSource) => {
+                this.hitTestSource = hitTestSource;
+              });
+            });
+          });
+          this.el.sceneEl.addEventListener('exit-vr', () => { this.hitTestSource = null; });
+        },
+        tick: function () {
+          if (!this.el.sceneEl.is('ar-mode') || !this.hitTestSource) return;
+          const frame = this.el.sceneEl.frame;
+          const renderer = this.el.sceneEl.renderer;
+          const referenceSpace = renderer.xr.getReferenceSpace();
+          const hitTestResults = frame.getHitTestResults(this.hitTestSource);
+          if (hitTestResults.length > 0) {
+            const hit = hitTestResults[0];
+            const hitPose = hit.getPose(referenceSpace);
+            this.el.setAttribute('visible', true);
+            this.el.setAttribute('position', hitPose.transform.position);
+            this.el.setAttribute('rotation', hitPose.transform.orientation);
+          } else {
+            this.el.setAttribute('visible', false);
+          }
+        }
+      });
+    </script>
   </head>
   <body>
 
-    <!-- 1. WEBXR SCENE (No AR.js needed!) -->
+    <!-- 1. WEBXR SCENE -->
     <a-scene 
-      webxr="requiredFeatures: hit-test, local-floor; referenceSpaceType: local-floor"
+      webxr="requiredFeatures: hit-test, local-floor; referenceSpaceType: local-floor; overlayElement: #dom-overlay;"
       renderer="logarithmicDepthBuffer: true; colorManagement: true;"
       vr-mode-ui="enabled: false"
       embedded>
@@ -94,12 +128,12 @@
         <img id="alif-img" src="Alif.png" crossorigin="anonymous">
       </a-assets>
 
-      <!-- The glowing ring that shows where you are pointing -->
-      <a-entity id="reticle" visible="false" ar-hit-test="doHitTestOnPageLoad: true;">
+      <!-- The glowing ring -->
+      <a-entity id="reticle" visible="false" ar-hit-test>
         <a-ring rotation="-90 0 0" radius-inner="0.1" radius-outer="0.15" material="shader: flat; color: #007bff; opacity: 0.8;"></a-ring>
       </a-entity>
 
-      <!-- The Urdu Letter (Hidden until placed) -->
+      <!-- The Urdu Letter -->
       <a-image 
         id="urdu-letter"
         src="#alif-img" 
@@ -138,29 +172,6 @@
         <div class="letter-box" onclick="selectLetter('Raa.png', 'ر')">ر</div>
         <div class="letter-box" onclick="selectLetter('Rreh.png', 'ڑ')">ڑ</div>
         <div class="letter-box" onclick="selectLetter('Zaa.png', 'ز')">ز</div>
-        <div class="letter-box" onclick="selectLetter('Zheh.png', 'ژ')">ژ</div>
-        <div class="letter-box" onclick="selectLetter('Seen.png', 'س')">س</div>
-        <div class="letter-box" onclick="selectLetter('Sheen.png', 'ش')">ش</div>
-        <div class="letter-box" onclick="selectLetter('Saad.png', 'ص')">ص</div>
-        <div class="letter-box" onclick="selectLetter('Daad.png', 'ض')">ض</div>
-        <div class="letter-box" onclick="selectLetter('Toa.png', 'ط')">ط</div>
-        <div class="letter-box" onclick="selectLetter('Zoe.png', 'ظ')">ظ</div>
-        <div class="letter-box" onclick="selectLetter('Ain.png', 'ع')">ع</div>
-        <div class="letter-box" onclick="selectLetter('Ghain.png', 'غ')">غ</div>
-        <div class="letter-box" onclick="selectLetter('Feh.png', 'ف')">ف</div>
-        <div class="letter-box" onclick="selectLetter('Qaf.png', 'ق')">ق</div>
-        <div class="letter-box" onclick="selectLetter('Kaf.png', 'ک')">ک</div>
-        <div class="letter-box" onclick="selectLetter('Gaf.png', 'گ')">گ</div>
-        <div class="letter-box" onclick="selectLetter('Lam.png', 'ل')">ل</div>
-        <div class="letter-box" onclick="selectLetter('Meem.png', 'م')">م</div>
-        <div class="letter-box" onclick="selectLetter('Noon.png', 'ن')">ن</div>
-        <div class="letter-box" onclick="selectLetter('NoonGhunna.png', 'ں')">ں</div>
-        <div class="letter-box" onclick="selectLetter('Wao.png', 'و')">و</div>
-        <div class="letter-box" onclick="selectLetter('Heh.png', 'ہ')">ہ</div>
-        <div class="letter-box" onclick="selectLetter('DoChashmiHeh.png', 'ھ')">ھ</div>
-        <div class="letter-box" onclick="selectLetter('Hamza.png', 'ء')">ء</div>
-        <div class="letter-box" onclick="selectLetter('Yeh.png', 'ی')">ی</div>
-        <div class="letter-box" onclick="selectLetter('BariYeh.png', 'ے')">ے</div>
       </div>
     </div>
 
@@ -184,35 +195,14 @@
         <div class="nav-letter" onclick="changeLetterNav('Raa.png', this)">ر</div>
         <div class="nav-letter" onclick="changeLetterNav('Rreh.png', this)">ڑ</div>
         <div class="nav-letter" onclick="changeLetterNav('Zaa.png', this)">ز</div>
-        <div class="nav-letter" onclick="changeLetterNav('Zheh.png', this)">ژ</div>
-        <div class="nav-letter" onclick="changeLetterNav('Seen.png', this)">س</div>
-        <div class="nav-letter" onclick="changeLetterNav('Sheen.png', this)">ش</div>
-        <div class="nav-letter" onclick="changeLetterNav('Saad.png', this)">ص</div>
-        <div class="nav-letter" onclick="changeLetterNav('Daad.png', this)">ض</div>
-        <div class="nav-letter" onclick="changeLetterNav('Toa.png', this)">ط</div>
-        <div class="nav-letter" onclick="changeLetterNav('Zoe.png', this)">ظ</div>
-        <div class="nav-letter" onclick="changeLetterNav('Ain.png', this)">ع</div>
-        <div class="nav-letter" onclick="changeLetterNav('Ghain.png', this)">غ</div>
-        <div class="nav-letter" onclick="changeLetterNav('Feh.png', this)">ف</div>
-        <div class="nav-letter" onclick="changeLetterNav('Qaf.png', this)">ق</div>
-        <div class="nav-letter" onclick="changeLetterNav('Kaf.png', this)">ک</div>
-        <div class="nav-letter" onclick="changeLetterNav('Gaf.png', this)">گ</div>
-        <div class="nav-letter" onclick="changeLetterNav('Lam.png', this)">ل</div>
-        <div class="nav-letter" onclick="changeLetterNav('Meem.png', this)">م</div>
-        <div class="nav-letter" onclick="changeLetterNav('Noon.png', this)">ن</div>
-        <div class="nav-letter" onclick="changeLetterNav('NoonGhunna.png', this)">ں</div>
-        <div class="nav-letter" onclick="changeLetterNav('Wao.png', this)">و</div>
-        <div class="nav-letter" onclick="changeLetterNav('Heh.png', this)">ہ</div>
-        <div class="nav-letter" onclick="changeLetterNav('DoChashmiHeh.png', this)">ھ</div>
-        <div class="nav-letter" onclick="changeLetterNav('Hamza.png', this)">ء</div>
-        <div class="nav-letter" onclick="changeLetterNav('Yeh.png', this)">ی</div>
-        <div class="nav-letter" onclick="changeLetterNav('BariYeh.png', this)">ے</div>
       </div>
       <button class="chevron" onclick="scrollNav(150)">&#10095;</button>
     </div>
 
-    <!-- The "Place" Button -->
-    <button id="place-btn" onclick="placeLetter()">PLACE LETTER ON DESK</button>
+    <!-- START AR BUTTON -->
+    <button id="start-ar-btn" class="ar-btn" onclick="startAR()">START AR CAMERA</button>
+    <!-- PLACE LETTER BUTTON -->
+    <button id="place-btn" class="ar-btn" onclick="placeLetter()" style="display: none; bottom: 120px;">PLACE LETTER ON DESK</button>
 
     <div id="bottom-nav">
       <button class="nav-btn" onclick="goHome()">
@@ -264,7 +254,6 @@
     <script>
       let currentZoom = 1;
       let currentOpacity = 0.5;
-      let isPlaced = false;
 
       function applySettings() {
         let letterEl = document.querySelector('#urdu-letter');
@@ -274,11 +263,12 @@
         }
       }
 
+      // Called from the Home Screen Grid
       function selectLetter(filename, character) {
         document.querySelector('#home-screen').style.display = 'none';
         document.querySelector('#top-nav').style.display = 'flex';
         document.querySelector('#bottom-nav').style.display = 'flex';
-        document.querySelector('#place-btn').style.display = 'block'; // Show place button
+        document.querySelector('#start-ar-btn').style.display = 'block'; // Show Start AR button
         
         let letterEl = document.querySelector('#urdu-letter');
         if (letterEl) {
@@ -295,6 +285,16 @@
         });
       }
 
+      // Starts the WebXR camera session
+      function startAR() {
+        document.querySelector('a-scene').enterVR();
+        // Hide the start button, show the place button
+        setTimeout(() => {
+          document.querySelector('#start-ar-btn').style.display = 'none';
+          document.querySelector('#place-btn').style.display = 'block';
+        }, 1000);
+      }
+
       function changeLetterNav(filename, element) {
         let letterEl = document.querySelector('#urdu-letter');
         if (letterEl) {
@@ -307,7 +307,6 @@
         letterEl.setAttribute('visible', 'false');
         document.querySelector('#reticle').setAttribute('visible', 'true');
         document.querySelector('#place-btn').style.display = 'block';
-        isPlaced = false;
       }
 
       // Grabs the position of the reticle and locks the letter to it
@@ -324,7 +323,6 @@
         
         reticle.setAttribute('visible', 'false');
         document.querySelector('#place-btn').style.display = 'none';
-        isPlaced = true;
       }
 
       function scrollNav(amount) {
@@ -335,6 +333,7 @@
         document.querySelector('#home-screen').style.display = 'flex';
         document.querySelector('#top-nav').style.display = 'none';
         document.querySelector('#bottom-nav').style.display = 'none';
+        document.querySelector('#start-ar-btn').style.display = 'none';
         document.querySelector('#place-btn').style.display = 'none';
       }
 
