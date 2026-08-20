@@ -1,8 +1,9 @@
 <!DOCTYPE html>
 <html>
   <head>
-    <title>Urdu Calligraphy WebXR</title>
+    <title>Urdu Calligraphy AR</title>
     <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/AR-js-org/AR.js@3.4.7/aframe/build/aframe-ar.js"></script>
     <style>
       body { margin: 0; overflow: hidden; font-family: sans-serif; }
       .a-enter-vr { display: none; } 
@@ -19,38 +20,65 @@
       .tab-header span.active { color: #007bff; border-bottom: 2px solid #007bff; }
       .letter-grid {
         display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px;
-        width: 90%; max-width: 400px; direction: rtl;
+        width: 90%; max-width: 400px;
+        /* RTL so the grid reads right-to-left, top-right first, like Urdu */
+        direction: rtl;
       }
       .letter-box {
         background: #f0f0f0; aspect-ratio: 1; display: flex; align-items: center;
         justify-content: center; font-size: 32px; cursor: pointer; border-radius: 8px;
         color: black; font-weight: bold;
       }
+      .letter-box:hover { background: #ddd; }
 
       /* --- AR VIEW NAVIGATION --- */
+
+      /* Top Nav (Horizontal Scroller made of letter-box cards) */
       #top-nav {
         position: fixed; top: 15px; left: 0; width: 100%; height: 70px;
-        z-index: 50; display: none; align-items: center; justify-content: center; gap: 10px;
+        z-index: 50; display: none; align-items: center; justify-content: center;
+        gap: 10px;
       }
       .chevron {
         background: rgba(0,0,0,0.85); border: none; width: 36px; height: 36px;
         border-radius: 50%; font-size: 16px; cursor: pointer; z-index: 10;
-        color: #fff; font-weight: bold; flex-shrink: 0; display: flex; align-items: center; justify-content: center; padding: 0;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.3); color: #fff; font-weight: bold;
+        flex-shrink: 0; display: flex; align-items: center; justify-content: center;
+        padding: 0;
       }
+      .chevron:active { background: rgba(0,0,0,1); }
+
       .letter-scroller {
         display: flex; gap: 12px; overflow-x: auto; scroll-behavior: smooth;
-        -webkit-overflow-scrolling: touch; touch-action: pan-x; max-width: 260px; 
-        padding: 4px 2px; direction: rtl; -ms-overflow-style: none; scrollbar-width: none;
+        -webkit-overflow-scrolling: touch; touch-action: pan-x;
+        scroll-snap-type: x proximity;
+        max-width: 260px; padding: 4px 2px;
+        /* RTL so Alif (first in the list) anchors on the right, and later
+           letters extend to the left — matching Urdu reading direction */
+        direction: rtl;
+        /* Hide scrollbar for cleaner look */
+        -ms-overflow-style: none; scrollbar-width: none;
       }
       .letter-scroller::-webkit-scrollbar { display: none; }
-      .nav-letter {
-        direction: ltr; flex-shrink: 0; width: 54px; height: 54px;
-        background: #f0f0f0; border-radius: 10px; display: flex; align-items: center;
-        justify-content: center; font-size: 26px; font-weight: bold; color: black;
-        cursor: pointer; user-select: none; box-shadow: 0 1px 3px rgba(0,0,0,0.15);
-      }
-      .nav-letter.active { background: #007bff; color: #fff; box-shadow: 0 2px 8px rgba(0,123,255,0.4); }
 
+      .nav-letter {
+        direction: ltr; /* keep each glyph rendering normally */
+        flex-shrink: 0; scroll-snap-align: center;
+        width: 54px; height: 54px;
+        background: #f0f0f0; border-radius: 10px;
+        display: flex; align-items: center; justify-content: center;
+        font-size: 26px; font-weight: bold; color: black;
+        cursor: pointer; user-select: none;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+        transition: background 0.15s, color 0.15s, transform 0.15s;
+      }
+      .nav-letter.active {
+        background: #007bff; color: #fff;
+        box-shadow: 0 2px 8px rgba(0,123,255,0.4);
+        transform: scale(1.05);
+      }
+
+      /* Bottom Nav (Icons + Text) */
       #bottom-nav {
         position: fixed; bottom: 0; left: 0; width: 100%; height: 80px;
         background: rgba(255,255,255,0.95); display: none; justify-content: space-around;
@@ -60,16 +88,16 @@
       .nav-btn span { font-size: 11px; font-weight: bold; color: #333; }
       .nav-icon { width: 28px; height: 28px; object-fit: contain; }
 
-      /* The Buttons */
-      .ar-btn {
-        position: fixed; bottom: 120px; left: 50%; transform: translateX(-50%);
-        background: #007bff; color: white; border: none; padding: 15px 30px;
-        border-radius: 30px; font-size: 16px; font-weight: bold; z-index: 60;
-        display: none; box-shadow: 0 4px 10px rgba(0,123,255,0.4);
+      /* --- MODALS --- */
+      .modal-overlay {
+        position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+        background: rgba(0,0,0,0.5); z-index: 150; display: none;
+        justify-content: center; align-items: center;
       }
-
-      .modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 150; display: none; justify-content: center; align-items: center; }
-      .modal-card { background: white; width: 80%; max-width: 350px; border-radius: 12px; padding: 20px; position: relative; text-align: center; }
+      .modal-card {
+        background: white; width: 80%; max-width: 350px; border-radius: 12px;
+        padding: 20px; position: relative; text-align: center;
+      }
       .close-x { position: absolute; top: 10px; right: 15px; font-size: 24px; cursor: pointer; color: #999; }
       .modal-title { font-weight: bold; font-size: 18px; margin-bottom: 20px; }
       .preset-btns { display: flex; justify-content: center; gap: 10px; margin: 20px 0; }
@@ -78,48 +106,12 @@
       .continue-btn { background: #007bff; color: white; width: 100%; padding: 12px; border: none; border-radius: 8px; font-weight: bold; font-size: 16px; cursor: pointer; margin-top: 10px;}
       input[type=range] { width: 100%; cursor: pointer; accent-color: #007bff; }
     </style>
-
-    <!-- WEBXR SLAM HIT-TEST SCRIPT -->
-    <script>
-      AFRAME.registerComponent('ar-hit-test', {
-        init: function () {
-          this.el.sceneEl.addEventListener('enter-vr', () => {
-            if (!this.el.sceneEl.is('ar-mode')) return;
-            const renderer = this.el.sceneEl.renderer;
-            const xr = renderer.xr;
-            this.hitTestSource = null;
-            xr.getSession().requestReferenceSpace('local-floor').then((referenceSpace) => {
-              xr.getSession().requestHitTestSource({ space: referenceSpace }).then((hitTestSource) => {
-                this.hitTestSource = hitTestSource;
-              });
-            });
-          });
-          this.el.sceneEl.addEventListener('exit-vr', () => { this.hitTestSource = null; });
-        },
-        tick: function () {
-          if (!this.el.sceneEl.is('ar-mode') || !this.hitTestSource) return;
-          const frame = this.el.sceneEl.frame;
-          const renderer = this.el.sceneEl.renderer;
-          const referenceSpace = renderer.xr.getReferenceSpace();
-          const hitTestResults = frame.getHitTestResults(this.hitTestSource);
-          if (hitTestResults.length > 0) {
-            const hit = hitTestResults[0];
-            const hitPose = hit.getPose(referenceSpace);
-            this.el.setAttribute('visible', true);
-            this.el.setAttribute('position', hitPose.transform.position);
-            this.el.setAttribute('rotation', hitPose.transform.orientation);
-          } else {
-            this.el.setAttribute('visible', false);
-          }
-        }
-      });
-    </script>
   </head>
   <body>
 
-    <!-- 1. WEBXR SCENE -->
+    <!-- 1. RAW A-FRAME SCENE -->
     <a-scene 
-      webxr="requiredFeatures: hit-test, local-floor; referenceSpaceType: local-floor; overlayElement: #dom-overlay;"
+      arjs="sourceType: webcam; debugUIEnabled: false; patternRatio: 0.5; trackingMethod: best;" 
       renderer="logarithmicDepthBuffer: true; colorManagement: true;"
       vr-mode-ui="enabled: false"
       embedded>
@@ -128,22 +120,18 @@
         <img id="alif-img" src="Alif.png" crossorigin="anonymous">
       </a-assets>
 
-      <!-- The glowing ring -->
-      <a-entity id="reticle" visible="false" ar-hit-test>
-        <a-ring rotation="-90 0 0" radius-inner="0.1" radius-outer="0.15" material="shader: flat; color: #007bff; opacity: 0.8;"></a-ring>
-      </a-entity>
-
-      <!-- The Urdu Letter -->
-      <a-image 
-        id="urdu-letter"
-        src="#alif-img" 
-        position="0 0.01 0" 
-        scale="1 1 1" 
-        rotation="-90 0 0"
-        side="double"
-        visible="false"
-        material="shader: flat; transparent: true; opacity: 0.5;">
-      </a-image>
+      <!-- Custom pattern marker (pattern-a4-3.patt), hosted alongside this file on GitHub -->
+      <a-marker type="pattern" url="pattern-a4-3.patt" id="marker">
+        <a-image 
+          id="urdu-letter"
+          src="#alif-img" 
+          position="0 0.01 0" 
+          scale="1 1 1" 
+          rotation="-90 0 0"
+          side="double"
+          material="shader: flat; transparent: true; opacity: 0.5;">
+        </a-image>
+      </a-marker>
 
       <a-entity camera></a-entity>
     </a-scene>
@@ -172,10 +160,35 @@
         <div class="letter-box" onclick="selectLetter('Raa.png', 'ر')">ر</div>
         <div class="letter-box" onclick="selectLetter('Rreh.png', 'ڑ')">ڑ</div>
         <div class="letter-box" onclick="selectLetter('Zaa.png', 'ز')">ز</div>
+        <div class="letter-box" onclick="selectLetter('Zheh.png', 'ژ')">ژ</div>
+        <div class="letter-box" onclick="selectLetter('Seen.png', 'س')">س</div>
+        <div class="letter-box" onclick="selectLetter('Sheen.png', 'ش')">ش</div>
+        <div class="letter-box" onclick="selectLetter('Saad.png', 'ص')">ص</div>
+        <div class="letter-box" onclick="selectLetter('Daad.png', 'ض')">ض</div>
+        <div class="letter-box" onclick="selectLetter('Toa.png', 'ط')">ط</div>
+        <div class="letter-box" onclick="selectLetter('Zoe.png', 'ظ')">ظ</div>
+        <div class="letter-box" onclick="selectLetter('Ain.png', 'ع')">ع</div>
+        <div class="letter-box" onclick="selectLetter('Ghain.png', 'غ')">غ</div>
+        <div class="letter-box" onclick="selectLetter('Feh.png', 'ف')">ف</div>
+        <div class="letter-box" onclick="selectLetter('Qaf.png', 'ق')">ق</div>
+        <div class="letter-box" onclick="selectLetter('Kaf.png', 'ک')">ک</div>
+        <div class="letter-box" onclick="selectLetter('Gaf.png', 'گ')">گ</div>
+        <div class="letter-box" onclick="selectLetter('Lam.png', 'ل')">ل</div>
+        <div class="letter-box" onclick="selectLetter('Meem.png', 'م')">م</div>
+        <div class="letter-box" onclick="selectLetter('Noon.png', 'ن')">ن</div>
+        <div class="letter-box" onclick="selectLetter('NoonGhunna.png', 'ں')">ں</div>
+        <div class="letter-box" onclick="selectLetter('Wao.png', 'و')">و</div>
+        <div class="letter-box" onclick="selectLetter('Heh.png', 'ہ')">ہ</div>
+        <div class="letter-box" onclick="selectLetter('DoChashmiHeh.png', 'ھ')">ھ</div>
+        <div class="letter-box" onclick="selectLetter('Hamza.png', 'ء')">ء</div>
+        <div class="letter-box" onclick="selectLetter('Yeh.png', 'ی')">ی</div>
+        <div class="letter-box" onclick="selectLetter('BariYeh.png', 'ے')">ے</div>
       </div>
     </div>
 
     <!-- 3. AR NAVIGATION -->
+
+    <!-- Top Nav (Scroller made of letter-box cards) -->
     <div id="top-nav">
       <button class="chevron" onclick="scrollNav(-150)">&#10094;</button>
       <div class="letter-scroller" id="letter-scroller">
@@ -195,15 +208,34 @@
         <div class="nav-letter" onclick="changeLetterNav('Raa.png', this)">ر</div>
         <div class="nav-letter" onclick="changeLetterNav('Rreh.png', this)">ڑ</div>
         <div class="nav-letter" onclick="changeLetterNav('Zaa.png', this)">ز</div>
+        <div class="nav-letter" onclick="changeLetterNav('Zheh.png', this)">ژ</div>
+        <div class="nav-letter" onclick="changeLetterNav('Seen.png', this)">س</div>
+        <div class="nav-letter" onclick="changeLetterNav('Sheen.png', this)">ش</div>
+        <div class="nav-letter" onclick="changeLetterNav('Saad.png', this)">ص</div>
+        <div class="nav-letter" onclick="changeLetterNav('Daad.png', this)">ض</div>
+        <div class="nav-letter" onclick="changeLetterNav('Toa.png', this)">ط</div>
+        <div class="nav-letter" onclick="changeLetterNav('Zoe.png', this)">ظ</div>
+        <div class="nav-letter" onclick="changeLetterNav('Ain.png', this)">ع</div>
+        <div class="nav-letter" onclick="changeLetterNav('Ghain.png', this)">غ</div>
+        <div class="nav-letter" onclick="changeLetterNav('Feh.png', this)">ف</div>
+        <div class="nav-letter" onclick="changeLetterNav('Qaf.png', this)">ق</div>
+        <div class="nav-letter" onclick="changeLetterNav('Kaf.png', this)">ک</div>
+        <div class="nav-letter" onclick="changeLetterNav('Gaf.png', this)">گ</div>
+        <div class="nav-letter" onclick="changeLetterNav('Lam.png', this)">ل</div>
+        <div class="nav-letter" onclick="changeLetterNav('Meem.png', this)">م</div>
+        <div class="nav-letter" onclick="changeLetterNav('Noon.png', this)">ن</div>
+        <div class="nav-letter" onclick="changeLetterNav('NoonGhunna.png', this)">ں</div>
+        <div class="nav-letter" onclick="changeLetterNav('Wao.png', this)">و</div>
+        <div class="nav-letter" onclick="changeLetterNav('Heh.png', this)">ہ</div>
+        <div class="nav-letter" onclick="changeLetterNav('DoChashmiHeh.png', this)">ھ</div>
+        <div class="nav-letter" onclick="changeLetterNav('Hamza.png', this)">ء</div>
+        <div class="nav-letter" onclick="changeLetterNav('Yeh.png', this)">ی</div>
+        <div class="nav-letter" onclick="changeLetterNav('BariYeh.png', this)">ے</div>
       </div>
       <button class="chevron" onclick="scrollNav(150)">&#10095;</button>
     </div>
 
-    <!-- START AR BUTTON -->
-    <button id="start-ar-btn" class="ar-btn" onclick="startAR()">START AR CAMERA</button>
-    <!-- PLACE LETTER BUTTON -->
-    <button id="place-btn" class="ar-btn" onclick="placeLetter()" style="display: none; bottom: 120px;">PLACE LETTER ON DESK</button>
-
+    <!-- Bottom Nav (Icons + Text) -->
     <div id="bottom-nav">
       <button class="nav-btn" onclick="goHome()">
         <img src="Home.svg" class="nav-icon">
@@ -268,63 +300,38 @@
         document.querySelector('#home-screen').style.display = 'none';
         document.querySelector('#top-nav').style.display = 'flex';
         document.querySelector('#bottom-nav').style.display = 'flex';
-        document.querySelector('#start-ar-btn').style.display = 'block'; // Show Start AR button
         
         let letterEl = document.querySelector('#urdu-letter');
         if (letterEl) {
           letterEl.setAttribute('src', filename);
         }
         
+        // Update the active state in the top scroller
         let navLetters = document.querySelectorAll('.nav-letter');
         navLetters.forEach(el => {
           el.classList.remove('active');
           if (el.innerText === character) {
             el.classList.add('active');
+            // Scroll the scroller to the active letter
             el.scrollIntoView({behavior: "smooth", inline: "center", block: "nearest"});
           }
         });
       }
 
-      // Starts the WebXR camera session
-      function startAR() {
-        document.querySelector('a-scene').enterVR();
-        // Hide the start button, show the place button
-        setTimeout(() => {
-          document.querySelector('#start-ar-btn').style.display = 'none';
-          document.querySelector('#place-btn').style.display = 'block';
-        }, 1000);
-      }
-
+      // Called from the Top Nav Scroller
       function changeLetterNav(filename, element) {
         let letterEl = document.querySelector('#urdu-letter');
         if (letterEl) {
           letterEl.setAttribute('src', filename);
         }
+        
+        // Remove active from all, add to clicked
         document.querySelectorAll('.nav-letter').forEach(el => el.classList.remove('active'));
         element.classList.add('active');
-        
-        // If user changes letter, hide the old one and make them place the new one
-        letterEl.setAttribute('visible', 'false');
-        document.querySelector('#reticle').setAttribute('visible', 'true');
-        document.querySelector('#place-btn').style.display = 'block';
+        element.scrollIntoView({behavior: "smooth", inline: "center", block: "nearest"});
       }
 
-      // Grabs the position of the reticle and locks the letter to it
-      function placeLetter() {
-        let reticle = document.querySelector('#reticle');
-        let letterEl = document.querySelector('#urdu-letter');
-        
-        let pos = reticle.getAttribute('position');
-        let rot = reticle.getAttribute('rotation');
-        
-        letterEl.setAttribute('position', pos);
-        letterEl.setAttribute('rotation', rot);
-        letterEl.setAttribute('visible', 'true');
-        
-        reticle.setAttribute('visible', 'false');
-        document.querySelector('#place-btn').style.display = 'none';
-      }
-
+      // Chevron scroll buttons
       function scrollNav(amount) {
         document.getElementById('letter-scroller').scrollBy({left: amount, behavior: 'smooth'});
       }
@@ -333,8 +340,6 @@
         document.querySelector('#home-screen').style.display = 'flex';
         document.querySelector('#top-nav').style.display = 'none';
         document.querySelector('#bottom-nav').style.display = 'none';
-        document.querySelector('#start-ar-btn').style.display = 'none';
-        document.querySelector('#place-btn').style.display = 'none';
       }
 
       function openModal(id) { document.getElementById(id).style.display = 'flex'; }
@@ -354,6 +359,27 @@
         currentOpacity = val;
         document.getElementById('opacity-slider').value = val;
       }
+
+      // --- Enable mouse-drag scrolling on desktop for the letter scroller
+      // (touch devices already scroll natively via overflow-x + touch-action)
+      (function enableDragScroll() {
+        const scroller = document.getElementById('letter-scroller');
+        let isDown = false, startX, scrollLeft;
+
+        scroller.addEventListener('mousedown', (e) => {
+          isDown = true;
+          startX = e.pageX - scroller.offsetLeft;
+          scrollLeft = scroller.scrollLeft;
+        });
+        window.addEventListener('mouseup', () => { isDown = false; });
+        window.addEventListener('mousemove', (e) => {
+          if (!isDown) return;
+          e.preventDefault();
+          const x = e.pageX - scroller.offsetLeft;
+          const walk = (x - startX) * 1.2;
+          scroller.scrollLeft = scrollLeft - walk;
+        });
+      })();
     </script>
 
   </body>
