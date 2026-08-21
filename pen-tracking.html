@@ -2,20 +2,37 @@
 <html>
   <head>
     <title>Urdu Calligraphy AR - Pen Tracking</title>
-    <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
-    <!-- MediaPipe Hands Solution -->
+    <!-- We removed A-Frame. Only MediaPipe is needed now! -->
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
     <style>
       body { margin: 0; overflow: hidden; font-family: sans-serif; background: black; }
-      .a-canvas { z-index: 2 !important; background: transparent !important; }
       
-      /* Layers (z-index ordering is critical) */
-      #camera-feed { position: fixed; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; z-index: 0; transform: scaleX(-1); /* Mirror */ }
-      #feedback-canvas { position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: 1; pointer-events: none; transform: scaleX(-1); /* Mirror */ }
+      /* Layers */
+      #camera-feed { 
+        position: fixed; top: 0; left: 0; width: 100%; height: 100%; 
+        object-fit: cover; z-index: 0; 
+        transform: scaleX(-1); /* Mirror for selfie view */
+      }
+      
+      #ghost-letter { 
+        position: fixed; top: 50%; left: 50%; 
+        transform: translate(-50%, -50%) scaleX(-1); /* Center and mirror to match video */
+        height: 40%; width: auto; opacity: 0.2; z-index: 1; 
+        pointer-events: none;
+      }
+      
+      #feedback-canvas { 
+        position: fixed; top: 0; left: 0; width: 100%; height: 100%; 
+        z-index: 2; pointer-events: none; 
+        transform: scaleX(-1); /* Match video mirroring */
+      }
       
       #ui-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: 3; pointer-events: none; }
-      #hint { position: absolute; top: 20px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.7); color: white; padding: 10px 20px; border-radius: 20px; display: block; }
+      #hint { 
+        position: absolute; top: 20px; left: 50%; transform: translateX(-50%); 
+        background: rgba(0,0,0,0.7); color: white; padding: 10px 20px; 
+        border-radius: 20px; display: block; font-weight: bold; 
+      }
     </style>
   </head>
   <body>
@@ -23,29 +40,18 @@
     <!-- 1. HTML5 Camera Video Background -->
     <video id="camera-feed" autoplay playsinline muted></video>
 
-    <!-- 2. 2D Canvas for Pen Tracking & Feedback -->
-    <canvas id="feedback-canvas"></canvas>
+    <!-- 2. The 2D Ghost Letter to trace -->
+    <img id="ghost-letter" src="Alif.svg" alt="Urdu Letter">
 
-    <!-- 3. A-Frame Scene (Renders the 3D Ghost Letter) -->
-    <a-scene embedded vr-mode-ui="enabled: false" renderer="alpha: true; colorManagement: true;">
-      <a-assets>
-        <img id="alif-img" src="Alif.svg" crossorigin="anonymous">
-      </a-assets>
-      <!-- Letter is fixed to the camera (HUD style) so it aligns with the 2D canvas -->
-      <a-entity camera>
-        <a-entity id="letter-anchor" position="0 0 -1.5" rotation="-90 0 0" scale="0.5 0.5 0.5">
-          <a-image id="urdu-letter" src="#alif-img" material="shader: flat; transparent: true; opacity: 0.2; side: double;"></a-image>
-        </a-entity>
-      </a-entity>
-    </a-scene>
+    <!-- 3. 2D Canvas for Pen Tracking & Feedback -->
+    <canvas id="feedback-canvas"></canvas>
 
     <!-- 4. UI Overlay -->
     <div id="ui-overlay">
-      <div id="hint">Show your index finger to the camera to start tracing!</div>
+      <div id="hint">Initializing camera...</div>
     </div>
 
     <script>
-      // --- 1. Setup Canvas & Camera ---
       const videoElement = document.getElementById('camera-feed');
       const canvas = document.getElementById('feedback-canvas');
       const ctx = canvas.getContext('2d');
@@ -58,36 +64,48 @@
       window.addEventListener('resize', resizeCanvas);
       resizeCanvas();
 
-     // Let MediaPipe handle the camera entirely to avoid conflicts
-      const camera = new Camera(videoElement, {
-        onFrame: async () => { 
-          await hands.send({ image: videoElement }); 
-        },
-        width: 640,
-        height: 480,
-        facingMode: 'environment' // Forces the back camera
-      });
-      camera.start();
+      // --- Robust Camera Initialization ---
+      async function startCamera() {
+        let stream;
+        try {
+          // Try to get the back camera
+          stream = await navigator.mediaDevices.getUserMedia({ 
+            video: { facingMode: { ideal: "environment" } } 
+          });
+        } catch (e) {
+          console.error("Back camera failed, trying default camera...", e);
+          try {
+            // Fallback to ANY camera (usually front camera on phones)
+            stream = await navigator.mediaDevices.getUserMedia({ video: true });
+          } catch (e2) {
+            alert("Camera Access Failed: " + e2.name + "\nPlease ensure no other apps are using the camera and you have granted browser permissions.");
+            hintEl.textContent = "Camera Access Denied";
+            return;
+          }
+        }
+        
+        videoElement.srcObject = stream;
+        videoElement.play();
+        hintEl.textContent = "Show your index finger to the camera to start tracing!";
+        
+        // Start the MediaPipe loop
+        requestAnimationFrame(loop);
+      }
 
-      // --- 2. Define the "Correct Path" (Target Trajectory) ---
-      // For demonstration, we define a simple straight line from Top to Bottom (like Alif).
-      // Coordinates are normalized (0 to 1). We will scale them to the screen.
+      // --- Comparison Logic ---
       const targetPath = [
-        { x: 0.5, y: 0.2 }, // Start point
-        { x: 0.5, y: 0.8 }  // End point
+        { x: 0.5, y: 0.3 }, // Start point (Top of Alif)
+        { x: 0.5, y: 0.7 }  // End point (Bottom of Alif)
       ];
-      let userTrail = []; // Stores the user's finger path
+      let userTrail = [];
       let lastPoint = null;
 
-      // --- 3. Comparison Logic ---
       function checkFeedback(currX, currY) {
         let isOnPath = false;
-        let correctDirection = true; // Assume true for now
+        let correctDirection = true;
         
-        // A. Check Proximity (Is the pen near the line?)
-        // Simple math: distance from point to the line segment
-        // For this example, we check if X is roughly in the middle of the screen
-        if (currX > 0.45 && currX < 0.55) {
+        // A. Check Proximity (Is the pen near the center line?)
+        if (currX > 0.42 && currX < 0.58) {
           isOnPath = true;
         }
 
@@ -105,14 +123,14 @@
         return 'green';                   // Perfect
       }
 
-      // --- 4. MediaPipe Processing ---
+      // --- MediaPipe Processing ---
       function onResults(results) {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         
         // Draw Target Path (White ghost line)
         ctx.beginPath();
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
-        ctx.lineWidth = 5;
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+        ctx.lineWidth = 8;
         const start = { x: targetPath[0].x * canvas.width, y: targetPath[0].y * canvas.height };
         const end = { x: targetPath[1].x * canvas.width, y: targetPath[1].y * canvas.height };
         ctx.moveTo(start.x, start.y);
@@ -122,7 +140,7 @@
         if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
           hintEl.style.display = 'none';
           
-          // Index finger tip is Landmark 8 in MediaPipe
+          // Index finger tip is Landmark 8
           const indexTip = results.multiHandLandmarks[0][8];
           const screenX = indexTip.x * canvas.width;
           const screenY = indexTip.y * canvas.height;
@@ -132,19 +150,19 @@
           
           // Add to user trail
           userTrail.push({ x: screenX, y: screenY, color: feedbackColor });
-          if (userTrail.length > 50) userTrail.shift(); // Limit trail length
+          if (userTrail.length > 60) userTrail.shift(); // Limit trail length
 
           // Draw User Trail
           userTrail.forEach((pt, index) => {
             ctx.beginPath();
-            ctx.arc(pt.x, pt.y, 10, 0, Math.PI * 2);
+            ctx.arc(pt.x, pt.y, 8, 0, Math.PI * 2);
             ctx.fillStyle = pt.color;
             ctx.fill();
           });
 
           // Draw "Pen Tip" (Trackable dot)
           ctx.beginPath();
-          ctx.arc(screenX, screenY, 15, 0, Math.PI * 2);
+          ctx.arc(screenX, screenY, 12, 0, Math.PI * 2);
           ctx.fillStyle = feedbackColor;
           ctx.fill();
           ctx.lineWidth = 3;
@@ -158,26 +176,29 @@
         }
       }
 
-      // --- 5. Initialize MediaPipe Hands ---
+      // --- Initialize MediaPipe Hands ---
       const hands = new Hands({
         locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`,
       });
       hands.setOptions({
         maxNumHands: 1,
-        modelComplexity: 1,
-        minDetectionConfidence: 0.7,
+        modelComplexity: 0, // Use Lite model for budget phones
+        minDetectionConfidence: 0.6,
         minTrackingConfidence: 0.5
       });
       hands.onResults(onResults);
 
-      // Start camera and feed it to MediaPipe
-      startCamera().then(() => {
-        const camera = new Camera(videoElement, {
-          onFrame: async () => { await hands.send({ image: videoElement }); },
-          width: 1280, height: 720
-        });
-        camera.start();
-      });
+      // --- The Loop ---
+      // We send the video frame to MediaPipe manually
+      async function loop() {
+        if (videoElement.readyState >= 2) {
+          await hands.send({ image: videoElement });
+        }
+        requestAnimationFrame(loop);
+      }
+
+      // Start everything!
+      startCamera();
 
     </script>
   </body>
