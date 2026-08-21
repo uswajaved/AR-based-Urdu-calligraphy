@@ -58,12 +58,16 @@
       window.addEventListener('resize', resizeCanvas);
       resizeCanvas();
 
-      async function startCamera() {
-        try {
-          const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
-          videoElement.srcObject = stream;
-        } catch (err) { console.error("Camera error:", err); }
-      }
+     // Let MediaPipe handle the camera entirely to avoid conflicts
+      const camera = new Camera(videoElement, {
+        onFrame: async () => { 
+          await hands.send({ image: videoElement }); 
+        },
+        width: 640,
+        height: 480,
+        facingMode: 'environment' // Forces the back camera
+      });
+      camera.start();
 
       // --- 2. Define the "Correct Path" (Target Trajectory) ---
       // For demonstration, we define a simple straight line from Top to Bottom (like Alif).
