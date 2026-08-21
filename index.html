@@ -2,12 +2,26 @@
 <html>
   <head>
     <title>Urdu Calligraphy AR</title>
+    <!-- AR.js and the marker/pattern system have been removed.
+         A-Frame 1.5.0 has native WebXR support, including the
+         built-in `ar-hit-test` component we use below for SLAM-style
+         (markerless) surface detection + tap-to-place. -->
     <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/gh/AR-js-org/AR.js@3.4.7/aframe/build/aframe-ar.js"></script>
     <style>
       body { margin: 0; overflow: hidden; font-family: sans-serif; }
-      .a-enter-vr { display: none; } 
-      .a-canvas { z-index: 0 !important; } 
+
+      /* Restyle (rather than hide) A-Frame's built-in Enter-AR button so it
+         matches the app. A-Frame automatically swaps this to "ENTER AR"
+         instead of "ENTER VR" when the browser supports immersive-ar. */
+      .a-enter-vr {
+        bottom: 100px !important; /* sit above the bottom nav */
+        z-index: 60 !important;
+      }
+      .a-enter-vr-button {
+        background-color: #007bff !important;
+        border-radius: 50% !important;
+      }
+      .a-canvas { z-index: 0 !important; }
 
       /* --- HOME SCREEN --- */
       #home-screen {
@@ -88,6 +102,14 @@
       .nav-btn span { font-size: 11px; font-weight: bold; color: #333; }
       .nav-icon { width: 28px; height: 28px; object-fit: contain; }
 
+      /* --- HINT BANNER (SLAM placement guidance) --- */
+      #place-hint {
+        position: fixed; top: 15px; left: 50%; transform: translateX(-50%);
+        background: rgba(0,0,0,0.75); color: #fff; padding: 8px 16px;
+        border-radius: 20px; font-size: 13px; font-weight: bold;
+        z-index: 55; display: none; text-align: center; max-width: 80%;
+      }
+
       /* --- MODALS --- */
       .modal-overlay {
         position: fixed; top: 0; left: 0; width: 100%; height: 100%;
@@ -109,34 +131,53 @@
   </head>
   <body>
 
-    <!-- 1. RAW A-FRAME SCENE (MARKERLESS / SLAM-STYLE) -->
-    <a-scene 
-      arjs="sourceType: webcam; debugUIEnabled: false; trackingMethod: best;" 
-      renderer="logarithmicDepthBuffer: true; colorManagement: true; alpha: true;"
-      vr-mode-ui="enabled: false"
+    <!-- 1. A-FRAME SCENE (WebXR hit-test, no markers) -->
+    <!--
+      webxr optionalFeatures:
+        - hit-test    -> lets us query real-world surfaces (the SLAM part)
+        - local-floor -> gives us a sensible floor-relative reference space
+        - dom-overlay -> lets our HTML nav/modals stay visible during the AR session
+    -->
+    <a-scene
+      webxr="optionalFeatures: hit-test, local-floor, dom-overlay; overlayElement: #dom-overlay;"
+      renderer="colorManagement: true; physicallyCorrectLights: true;"
+      vr-mode-ui="enabled: true"
       embedded>
 
       <a-assets>
-        <!-- Changed default asset to SVG -->
         <img id="alif-img" src="Alif.svg" crossorigin="anonymous">
       </a-assets>
 
-      <!-- 
-        Markerless Placement: 
-        Instead of an <a-marker>, we place the object directly in world space 
-        at position 0 0 -2 (2 meters in front of the camera's starting point).
-      -->
-      <a-entity id="letter-anchor" position="0 0 -2" rotation="-90 0 0">
-        <a-image 
+      <!-- Reticle: shows where the letter WOULD land. `ar-hit-test` continuously
+           moves this entity to match the detected real-world surface under the
+           camera's forward ray. `target` is the entity to move/reveal on tap. -->
+      <a-entity
+        id="reticle"
+        ar-hit-test="target:#letter-anchor"
+        geometry="primitive: ring; radiusInner: 0.02; radiusOuter: 0.03"
+        material="color: #007bff; shader: flat"
+        rotation="-90 0 0"
+        visible="false">
+      </a-entity>
+
+      <!-- The placed letter. Hidden until the user taps to anchor it in place. -->
+      <a-entity id="letter-anchor" visible="false">
+        <a-image
           id="urdu-letter"
-          src="#alif-img" 
-          scale="1 1 1" 
-          material="shader: flat; transparent: true; opacity: 0.5; side: double;">
+          src="#alif-img"
+          position="0 0.01 0"
+          scale="0.3 0.3 0.3"
+          rotation="-90 0 0"
+          side="double"
+          material="shader: flat; transparent: true; opacity: 0.5;">
         </a-image>
       </a-entity>
 
       <a-entity camera></a-entity>
     </a-scene>
+
+    <!-- Placement guidance shown while looking for a surface / after placing -->
+    <div id="place-hint">Move your phone to find a surface, then tap to place</div>
 
     <!-- 2. HOME SCREEN -->
     <div id="home-screen">
@@ -188,113 +229,122 @@
       </div>
     </div>
 
-    <!-- 3. AR NAVIGATION -->
+    <!-- 3. AR NAVIGATION (dom-overlay content — must live inside #dom-overlay
+         so it stays visible/interactive during the immersive-ar session) -->
+    <div id="dom-overlay">
 
-    <!-- Top Nav (Scroller made of letter-box cards) -->
-    <div id="top-nav">
-      <button class="chevron" onclick="scrollNav(-150)">&#10094;</button>
-      <div class="letter-scroller" id="letter-scroller">
-        <div class="nav-letter active" onclick="changeLetterNav('Alif.svg', this)">ا</div>
-        <div class="nav-letter" onclick="changeLetterNav('Baa.svg', this)">ب</div>
-        <div class="nav-letter" onclick="changeLetterNav('Peh.svg', this)">پ</div>
-        <div class="nav-letter" onclick="changeLetterNav('Taa.svg', this)">ت</div>
-        <div class="nav-letter" onclick="changeLetterNav('Tay.svg', this)">ٹ</div>
-        <div class="nav-letter" onclick="changeLetterNav('Thaa.svg', this)">ث</div>
-        <div class="nav-letter" onclick="changeLetterNav('Jeem.svg', this)">ج</div>
-        <div class="nav-letter" onclick="changeLetterNav('Cheh.svg', this)">چ</div>
-        <div class="nav-letter" onclick="changeLetterNav('Haa.svg', this)">ح</div>
-        <div class="nav-letter" onclick="changeLetterNav('Khaa.svg', this)">خ</div>
-        <div class="nav-letter" onclick="changeLetterNav('Daal.svg', this)">د</div>
-        <div class="nav-letter" onclick="changeLetterNav('Ddal.svg', this)">ڈ</div>
-        <div class="nav-letter" onclick="changeLetterNav('Zaal.svg', this)">ذ</div>
-        <div class="nav-letter" onclick="changeLetterNav('Raa.svg', this)">ر</div>
-        <div class="nav-letter" onclick="changeLetterNav('Rreh.svg', this)">ڑ</div>
-        <div class="nav-letter" onclick="changeLetterNav('Zaa.svg', this)">ز</div>
-        <div class="nav-letter" onclick="changeLetterNav('Zheh.svg', this)">ژ</div>
-        <div class="nav-letter" onclick="changeLetterNav('Seen.svg', this)">س</div>
-        <div class="nav-letter" onclick="changeLetterNav('Sheen.svg', this)">ش</div>
-        <div class="nav-letter" onclick="changeLetterNav('Saad.svg', this)">ص</div>
-        <div class="nav-letter" onclick="changeLetterNav('Daad.svg', this)">ض</div>
-        <div class="nav-letter" onclick="changeLetterNav('Toa.svg', this)">ط</div>
-        <div class="nav-letter" onclick="changeLetterNav('Zoe.svg', this)">ظ</div>
-        <div class="nav-letter" onclick="changeLetterNav('Ain.svg', this)">ع</div>
-        <div class="nav-letter" onclick="changeLetterNav('Ghain.svg', this)">غ</div>
-        <div class="nav-letter" onclick="changeLetterNav('Feh.svg', this)">ف</div>
-        <div class="nav-letter" onclick="changeLetterNav('Qaf.svg', this)">ق</div>
-        <div class="nav-letter" onclick="changeLetterNav('Kaf.svg', this)">ک</div>
-        <div class="nav-letter" onclick="changeLetterNav('Gaf.svg', this)">گ</div>
-        <div class="nav-letter" onclick="changeLetterNav('Lam.svg', this)">ل</div>
-        <div class="nav-letter" onclick="changeLetterNav('Meem.svg', this)">م</div>
-        <div class="nav-letter" onclick="changeLetterNav('Noon.svg', this)">ن</div>
-        <div class="nav-letter" onclick="changeLetterNav('NoonGhunna.svg', this)">ں</div>
-        <div class="nav-letter" onclick="changeLetterNav('Wao.svg', this)">و</div>
-        <div class="nav-letter" onclick="changeLetterNav('Heh.svg', this)">ہ</div>
-        <div class="nav-letter" onclick="changeLetterNav('DoChashmiHeh.svg', this)">ھ</div>
-        <div class="nav-letter" onclick="changeLetterNav('Hamza.svg', this)">ء</div>
-        <div class="nav-letter" onclick="changeLetterNav('Yeh.svg', this)">ی</div>
-        <div class="nav-letter" onclick="changeLetterNav('BariYeh.svg', this)">ے</div>
-      </div>
-      <button class="chevron" onclick="scrollNav(150)">&#10095;</button>
-    </div>
-
-    <!-- Bottom Nav (Icons + Text) -->
-    <div id="bottom-nav">
-      <button class="nav-btn" onclick="goHome()">
-        <img src="Home.svg" class="nav-icon">
-        <span>HOME</span>
-      </button>
-      <button class="nav-btn" onclick="openModal('zoom-modal')">
-        <img src="Zoom.svg" class="nav-icon">
-        <span>ZOOM</span>
-      </button>
-      <button class="nav-btn" onclick="openModal('opacity-modal')">
-        <img src="Opacity.svg" class="nav-icon">
-        <span>OPACITY</span>
-      </button>
-    </div>
-
-    <!-- 4. MODALS -->
-    <div class="modal-overlay" id="zoom-modal">
-      <div class="modal-card">
-        <span class="close-x" onclick="closeModal('zoom-modal')">&times;</span>
-        <div class="modal-title">Choose a zoom level</div>
-        <input type="range" id="zoom-slider" min="0.5" max="3" step="0.1" value="1" oninput="updateZoomPreview(this.value)">
-        <div class="preset-btns">
-          <button onclick="setZoom(1)">1x</button>
-          <button onclick="setZoom(1.5)">1.5x</button>
-          <button onclick="setZoom(2)">2x</button>
-          <button onclick="setZoom(2.5)">2.5x</button>
+      <!-- Top Nav (Scroller made of letter-box cards) -->
+      <div id="top-nav">
+        <button class="chevron" onclick="scrollNav(-150)">&#10094;</button>
+        <div class="letter-scroller" id="letter-scroller">
+          <div class="nav-letter active" onclick="changeLetterNav('Alif.svg', this)">ا</div>
+          <div class="nav-letter" onclick="changeLetterNav('Baa.svg', this)">ب</div>
+          <div class="nav-letter" onclick="changeLetterNav('Peh.svg', this)">پ</div>
+          <div class="nav-letter" onclick="changeLetterNav('Taa.svg', this)">ت</div>
+          <div class="nav-letter" onclick="changeLetterNav('Tay.svg', this)">ٹ</div>
+          <div class="nav-letter" onclick="changeLetterNav('Thaa.svg', this)">ث</div>
+          <div class="nav-letter" onclick="changeLetterNav('Jeem.svg', this)">ج</div>
+          <div class="nav-letter" onclick="changeLetterNav('Cheh.svg', this)">چ</div>
+          <div class="nav-letter" onclick="changeLetterNav('Haa.svg', this)">ح</div>
+          <div class="nav-letter" onclick="changeLetterNav('Khaa.svg', this)">خ</div>
+          <div class="nav-letter" onclick="changeLetterNav('Daal.svg', this)">د</div>
+          <div class="nav-letter" onclick="changeLetterNav('Ddal.svg', this)">ڈ</div>
+          <div class="nav-letter" onclick="changeLetterNav('Zaal.svg', this)">ذ</div>
+          <div class="nav-letter" onclick="changeLetterNav('Raa.svg', this)">ر</div>
+          <div class="nav-letter" onclick="changeLetterNav('Rreh.svg', this)">ڑ</div>
+          <div class="nav-letter" onclick="changeLetterNav('Zaa.svg', this)">ز</div>
+          <div class="nav-letter" onclick="changeLetterNav('Zheh.svg', this)">ژ</div>
+          <div class="nav-letter" onclick="changeLetterNav('Seen.svg', this)">س</div>
+          <div class="nav-letter" onclick="changeLetterNav('Sheen.svg', this)">ش</div>
+          <div class="nav-letter" onclick="changeLetterNav('Saad.svg', this)">ص</div>
+          <div class="nav-letter" onclick="changeLetterNav('Daad.svg', this)">ض</div>
+          <div class="nav-letter" onclick="changeLetterNav('Toa.svg', this)">ط</div>
+          <div class="nav-letter" onclick="changeLetterNav('Zoe.svg', this)">ظ</div>
+          <div class="nav-letter" onclick="changeLetterNav('Ain.svg', this)">ع</div>
+          <div class="nav-letter" onclick="changeLetterNav('Ghain.svg', this)">غ</div>
+          <div class="nav-letter" onclick="changeLetterNav('Feh.svg', this)">ف</div>
+          <div class="nav-letter" onclick="changeLetterNav('Qaf.svg', this)">ق</div>
+          <div class="nav-letter" onclick="changeLetterNav('Kaf.svg', this)">ک</div>
+          <div class="nav-letter" onclick="changeLetterNav('Gaf.svg', this)">گ</div>
+          <div class="nav-letter" onclick="changeLetterNav('Lam.svg', this)">ل</div>
+          <div class="nav-letter" onclick="changeLetterNav('Meem.svg', this)">م</div>
+          <div class="nav-letter" onclick="changeLetterNav('Noon.svg', this)">ن</div>
+          <div class="nav-letter" onclick="changeLetterNav('NoonGhunna.svg', this)">ں</div>
+          <div class="nav-letter" onclick="changeLetterNav('Wao.svg', this)">و</div>
+          <div class="nav-letter" onclick="changeLetterNav('Heh.svg', this)">ہ</div>
+          <div class="nav-letter" onclick="changeLetterNav('DoChashmiHeh.svg', this)">ھ</div>
+          <div class="nav-letter" onclick="changeLetterNav('Hamza.svg', this)">ء</div>
+          <div class="nav-letter" onclick="changeLetterNav('Yeh.svg', this)">ی</div>
+          <div class="nav-letter" onclick="changeLetterNav('BariYeh.svg', this)">ے</div>
         </div>
-        <button class="continue-btn" onclick="closeModal('zoom-modal')">CONTINUE</button>
+        <button class="chevron" onclick="scrollNav(150)">&#10095;</button>
       </div>
-    </div>
 
-    <div class="modal-overlay" id="opacity-modal">
-      <div class="modal-card">
-        <span class="close-x" onclick="closeModal('opacity-modal')">&times;</span>
-        <div class="modal-title">Choose opacity level</div>
-        <input type="range" id="opacity-slider" min="0.1" max="1" step="0.1" value="0.5" oninput="updateOpacityPreview(this.value)">
-        <div class="preset-btns">
-          <button onclick="setOpacity(0.25)">25</button>
-          <button onclick="setOpacity(0.50)">50</button>
-          <button onclick="setOpacity(0.75)">75</button>
-          <button onclick="setOpacity(1.0)">100</button>
-        </div>
-        <button class="continue-btn" onclick="closeModal('opacity-modal')">CONTINUE</button>
+      <!-- Bottom Nav (Icons + Text) -->
+      <div id="bottom-nav">
+        <button class="nav-btn" onclick="goHome()">
+          <img src="Home.svg" class="nav-icon">
+          <span>HOME</span>
+        </button>
+        <button class="nav-btn" onclick="resetPlacement()">
+          <img src="Place.svg" class="nav-icon">
+          <span>PLACE</span>
+        </button>
+        <button class="nav-btn" onclick="openModal('zoom-modal')">
+          <img src="Zoom.svg" class="nav-icon">
+          <span>ZOOM</span>
+        </button>
+        <button class="nav-btn" onclick="openModal('opacity-modal')">
+          <img src="Opacity.svg" class="nav-icon">
+          <span>OPACITY</span>
+        </button>
       </div>
-    </div>
+
+      <!-- 4. MODALS -->
+      <div class="modal-overlay" id="zoom-modal">
+        <div class="modal-card">
+          <span class="close-x" onclick="closeModal('zoom-modal')">&times;</span>
+          <div class="modal-title">Choose a zoom level</div>
+          <input type="range" id="zoom-slider" min="0.5" max="3" step="0.1" value="1" oninput="updateZoomPreview(this.value)">
+          <div class="preset-btns">
+            <button onclick="setZoom(1)">1x</button>
+            <button onclick="setZoom(1.5)">1.5x</button>
+            <button onclick="setZoom(2)">2x</button>
+            <button onclick="setZoom(2.5)">2.5x</button>
+          </div>
+          <button class="continue-btn" onclick="closeModal('zoom-modal')">CONTINUE</button>
+        </div>
+      </div>
+
+      <div class="modal-overlay" id="opacity-modal">
+        <div class="modal-card">
+          <span class="close-x" onclick="closeModal('opacity-modal')">&times;</span>
+          <div class="modal-title">Choose opacity level</div>
+          <input type="range" id="opacity-slider" min="0.1" max="1" step="0.1" value="0.5" oninput="updateOpacityPreview(this.value)">
+          <div class="preset-btns">
+            <button onclick="setOpacity(0.25)">25</button>
+            <button onclick="setOpacity(0.50)">50</button>
+            <button onclick="setOpacity(0.75)">75</button>
+            <button onclick="setOpacity(1.0)">100</button>
+          </div>
+          <button class="continue-btn" onclick="closeModal('opacity-modal')">CONTINUE</button>
+        </div>
+      </div>
+
+    </div><!-- /#dom-overlay -->
 
     <!-- JAVASCRIPT LOGIC -->
     <script>
       let currentZoom = 1;
       let currentOpacity = 0.5;
+      const BASE_SCALE = 0.3; // meters — keep AR content small per WebXR best practice
 
       function applySettings() {
         let letterEl = document.querySelector('#urdu-letter');
         if (letterEl) {
-          letterEl.setAttribute('scale', currentZoom + ' ' + currentZoom + ' 1');
-          // Side: double ensures it doesn't become invisible when viewed from behind
-          letterEl.setAttribute('material', 'shader: flat; transparent: true; opacity: ' + currentOpacity + '; side: double');
+          const s = BASE_SCALE * currentZoom;
+          letterEl.setAttribute('scale', s + ' ' + s + ' 1');
+          letterEl.setAttribute('material', 'shader: flat; transparent: true; opacity: ' + currentOpacity);
         }
       }
 
@@ -303,22 +353,23 @@
         document.querySelector('#home-screen').style.display = 'none';
         document.querySelector('#top-nav').style.display = 'flex';
         document.querySelector('#bottom-nav').style.display = 'flex';
-        
+
         let letterEl = document.querySelector('#urdu-letter');
         if (letterEl) {
           letterEl.setAttribute('src', filename);
         }
-        
+
         // Update the active state in the top scroller
         let navLetters = document.querySelectorAll('.nav-letter');
         navLetters.forEach(el => {
           el.classList.remove('active');
           if (el.innerText === character) {
             el.classList.add('active');
-            // Scroll the scroller to the active letter
             el.scrollIntoView({behavior: "smooth", inline: "center", block: "nearest"});
           }
         });
+
+        resetPlacement();
       }
 
       // Called from the Top Nav Scroller
@@ -327,8 +378,7 @@
         if (letterEl) {
           letterEl.setAttribute('src', filename);
         }
-        
-        // Remove active from all, add to clicked
+
         document.querySelectorAll('.nav-letter').forEach(el => el.classList.remove('active'));
         element.classList.add('active');
         element.scrollIntoView({behavior: "smooth", inline: "center", block: "nearest"});
@@ -343,12 +393,22 @@
         document.querySelector('#home-screen').style.display = 'flex';
         document.querySelector('#top-nav').style.display = 'none';
         document.querySelector('#bottom-nav').style.display = 'none';
+        document.getElementById('place-hint').style.display = 'none';
+        document.querySelector('#letter-anchor').setAttribute('visible', false);
+        document.querySelector('#reticle').setAttribute('visible', false);
+      }
+
+      // SLAM placement: re-show the reticle so the user can tap a new spot
+      function resetPlacement() {
+        document.querySelector('#letter-anchor').setAttribute('visible', false);
+        document.getElementById('place-hint').textContent = 'Move your phone to find a surface, then tap to place';
+        document.getElementById('place-hint').style.display = 'block';
       }
 
       function openModal(id) { document.getElementById(id).style.display = 'flex'; }
-      function closeModal(id) { 
-        document.getElementById(id).style.display = 'none'; 
-        applySettings(); 
+      function closeModal(id) {
+        document.getElementById(id).style.display = 'none';
+        applySettings();
       }
 
       function updateZoomPreview(val) { currentZoom = parseFloat(val); }
@@ -362,6 +422,30 @@
         currentOpacity = val;
         document.getElementById('opacity-slider').value = val;
       }
+
+      // --- WebXR hit-test wiring ---
+      // The `ar-hit-test` component (built into A-Frame core) moves #reticle
+      // to track any real-world surface it finds, and fires 'ar-hit-test-start'
+      // once tracking begins. We use that to reveal the reticle + hint text.
+      document.addEventListener('DOMContentLoaded', () => {
+        const reticle = document.querySelector('#reticle');
+        const anchor = document.querySelector('#letter-anchor');
+        const hint = document.getElementById('place-hint');
+
+        reticle.addEventListener('ar-hit-test-start', () => {
+          reticle.setAttribute('visible', true);
+        });
+
+        // Fired when the user taps the screen while a hit-test result is live.
+        // `target` (#letter-anchor) is automatically moved to that world position
+        // by the component — we just need to reveal it and hide the reticle.
+        reticle.addEventListener('ar-hit-test-select', () => {
+          anchor.setAttribute('visible', true);
+          reticle.setAttribute('visible', false);
+          hint.style.display = 'none';
+          applySettings();
+        });
+      });
 
       // --- Enable mouse-drag scrolling on desktop for the letter scroller
       // (touch devices already scroll natively via overflow-x + touch-action)
