@@ -6,6 +6,72 @@
          A-Frame 1.5.0 has native WebXR support, including the
          built-in `ar-hit-test` component we use below for SLAM-style
          (markerless) surface detection + tap-to-place. -->
+    <!-- --- TEMP DEBUG CONSOLE, remove before production ---
+         Installed in <head> before A-Frame so load-time errors are captured. -->
+    <script>
+      (function () {
+        var lines = [];
+        var el = null;
+
+        function paint(entry) {
+          if (!el) return;
+          var row = document.createElement('div');
+          row.style.color = entry.kind === 'err' ? '#ff5555' : '#7CFC00';
+          row.textContent = entry.msg;
+          el.appendChild(row);
+          el.scrollTop = el.scrollHeight;
+        }
+
+        function dbg(msg, kind) {
+          var entry = { msg: String(msg), kind: kind || 'info' };
+          lines.push(entry);
+          paint(entry);
+        }
+
+        window.onerror = function (message, source, lineno, colno, error) {
+          dbg('[onerror] ' + message + ' @ ' + source + ':' + lineno + ':' + colno, 'err');
+          if (error && error.stack) dbg(error.stack, 'err');
+          return false;
+        };
+
+        window.addEventListener('unhandledrejection', function (event) {
+          var reason = event.reason;
+          var text = (reason && reason.stack) ? reason.stack : String(reason);
+          dbg('[unhandledrejection] ' + text, 'err');
+        });
+
+        function checkXr() {
+          dbg('[debug] TEMP debug console active');
+          if (typeof navigator.xr === 'undefined') {
+            dbg('[xr] navigator.xr is undefined (WebXR missing — often non-HTTPS, insecure context, or unsupported browser)', 'err');
+            return;
+          }
+          dbg('[xr] navigator.xr exists');
+          try {
+            navigator.xr.isSessionSupported('immersive-ar').then(function (ok) {
+              dbg('[xr] isSessionSupported("immersive-ar") => ' + ok);
+            }).catch(function (e) {
+              dbg('[xr] isSessionSupported("immersive-ar") error: ' + ((e && e.message) ? e.message : e), 'err');
+            });
+          } catch (e) {
+            dbg('[xr] isSessionSupported threw: ' + ((e && e.message) ? e.message : e), 'err');
+          }
+        }
+
+        function boot() {
+          el = document.getElementById('temp-debug-console');
+          if (!el) return;
+          lines.forEach(paint);
+          checkXr();
+        }
+
+        if (document.readyState === 'loading') {
+          document.addEventListener('DOMContentLoaded', boot);
+        } else {
+          boot();
+        }
+      })();
+    </script>
     <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
     <style>
       body { margin: 0; overflow: hidden; font-family: sans-serif; }
@@ -127,6 +193,28 @@
       .preset-btns button.active { background: #007bff; color: white; border-color: #007bff; }
       .continue-btn { background: #007bff; color: white; width: 100%; padding: 12px; border: none; border-radius: 8px; font-weight: bold; font-size: 16px; cursor: pointer; margin-top: 10px;}
       input[type=range] { width: 100%; cursor: pointer; accent-color: #007bff; }
+
+      /* --- TEMP DEBUG CONSOLE, remove before production --- */
+      #temp-debug-console {
+        position: fixed;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        max-height: 40vh;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+        background: rgba(0, 0, 0, 0.75);
+        color: #7CFC00;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 11px;
+        line-height: 1.35;
+        padding: 8px 10px;
+        z-index: 99999;
+        pointer-events: auto;
+        box-sizing: border-box;
+        word-break: break-word;
+        white-space: pre-wrap;
+      }
     </style>
   </head>
   <body>
@@ -332,6 +420,11 @@
       </div>
 
     </div><!-- /#dom-overlay -->
+
+    <!-- --- TEMP DEBUG CONSOLE, remove before production ---
+         Kept outside #dom-overlay so it does not become WebXR overlay content
+         or steal hit-test / overlay semantics. High z-index only. -->
+    <div id="temp-debug-console"></div>
 
     <!-- JAVASCRIPT LOGIC -->
     <script>
