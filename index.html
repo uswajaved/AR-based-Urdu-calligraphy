@@ -6,194 +6,35 @@
          A-Frame 1.5.0 has native WebXR support, including the
          built-in `ar-hit-test` component we use below for SLAM-style
          (markerless) surface detection + tap-to-place. -->
-    <!-- --- TEMP DEBUG CONSOLE, remove before production ---
-         Installed in <head> before A-Frame so load-time errors are captured. -->
+    <!-- If a-assets finish but a-scene never emits loaded, unblock immediately
+         so enterAR() can run from a user tap. No on-screen debug overlay. -->
     <script>
       (function () {
-        var lines = [];
-        var el = null;
-
-        function paint(entry) {
-          if (!el) return;
-          var row = document.createElement('div');
-          row.style.color = entry.kind === 'err' ? '#ff5555' : (entry.kind === 'warn' ? '#ffcc00' : '#7CFC00');
-          row.textContent = entry.msg;
-          el.appendChild(row);
-          el.scrollTop = el.scrollHeight;
-        }
-
-        function dbg(msg, kind) {
-          var entry = { msg: String(msg), kind: kind || 'info' };
-          lines.push(entry);
-          paint(entry);
-        }
-        window.__tempDbg = dbg;
-        window.dbg = dbg;
-
-        function argsToString(args) {
-          var out = [];
-          for (var i = 0; i < args.length; i++) {
-            var a = args[i];
-            if (a == null) { out.push(String(a)); continue; }
-            if (typeof a === 'string') { out.push(a); continue; }
-            if (a instanceof Error) { out.push(a.stack || a.message); continue; }
-            try { out.push(JSON.stringify(a)); }
-            catch (e) { out.push(String(a)); }
-          }
-          return out.join(' ');
-        }
-
-        var origError = console.error;
-        var origWarn = console.warn;
-        console.error = function () {
-          dbg('[console.error] ' + argsToString(arguments), 'err');
-          return origError.apply(console, arguments);
-        };
-        console.warn = function () {
-          dbg('[console.warn] ' + argsToString(arguments), 'warn');
-          return origWarn.apply(console, arguments);
-        };
-
-        window.onerror = function (message, source, lineno, colno, error) {
-          dbg('[onerror] ' + message + ' @ ' + source + ':' + lineno + ':' + colno, 'err');
-          if (error && error.stack) dbg(error.stack, 'err');
-          return false;
-        };
-
-        window.addEventListener('unhandledrejection', function (event) {
-          var reason = event.reason;
-          var text = (reason && reason.stack) ? reason.stack : String(reason);
-          dbg('[unhandledrejection] ' + text, 'err');
-        });
-
-        function checkXr() {
-          dbg('[debug] TEMP debug console active');
-          if (typeof navigator.xr === 'undefined') {
-            dbg('[xr] navigator.xr is undefined (WebXR missing — often non-HTTPS, insecure context, or unsupported browser)', 'err');
-            return;
-          }
-          dbg('[xr] navigator.xr exists');
-          try {
-            navigator.xr.isSessionSupported('immersive-ar').then(function (ok) {
-              dbg('[xr] isSessionSupported("immersive-ar") => ' + ok);
-            }).catch(function (e) {
-              dbg('[xr] isSessionSupported("immersive-ar") error: ' + ((e && e.message) ? e.message : e), 'err');
-            });
-          } catch (e) {
-            dbg('[xr] isSessionSupported threw: ' + ((e && e.message) ? e.message : e), 'err');
-          }
-        }
-
-        function forceSceneReady(reason) {
+        function forceSceneReady() {
           var scene = document.querySelector('a-scene');
           var assets = document.querySelector('a-assets');
-          dbg('[scene] force-resume: ' + reason, 'warn');
           try {
             if (assets && !assets.hasLoaded && typeof assets.load === 'function') {
               assets.load();
             }
-          } catch (e) {
-            dbg('[a-assets] load() threw: ' + e, 'err');
-          }
-          try {
-            // AEntity.load() ignores childFilter and will no-op if hasLoaded is
-            // already true. Register play()'s 'loaded' listener FIRST, then
-            // force-emit so the render loop still starts.
-            if (scene && !scene.hasLoaded) {
-              if (typeof scene.play === 'function') {
-                try { scene.play(); } catch (playErr) { /* already playing */ }
-              }
-              scene.hasLoaded = true;
-              if (typeof scene.emit === 'function') {
-                scene.emit('loaded-private', undefined, false);
-                scene.emit('loaded', undefined, false);
-              }
-              dbg('[scene] emitted loaded (hasLoaded forced true)');
+          } catch (e) {}
+          if (scene && !scene.hasLoaded) {
+            if (typeof scene.play === 'function') {
+              try { scene.play(); } catch (e) { /* already playing */ }
             }
-          } catch (e) {
-            dbg('[scene] force loaded threw: ' + e, 'err');
+            scene.hasLoaded = true;
+            if (typeof scene.emit === 'function') scene.emit('loaded');
           }
-        }
-
-        function instrumentAssets() {
-          var assets = document.querySelector('a-assets');
-          if (!assets) {
-            dbg('[asset warning] no a-assets element', 'warn');
-            return;
-          }
-
-          var children = assets.children;
-          dbg('[asset] child count=' + children.length);
-
-          for (var i = 0; i < children.length; i++) {
-            (function (el) {
-              var srcAttr = el.getAttribute('src');
-              dbg('[asset] ' + el.tagName + ' id=' + (el.id || '(none)') + ' src=' + JSON.stringify(srcAttr));
-
-              if (!el.id) {
-                dbg('[asset warning] asset missing id: ' + el.tagName, 'warn');
-              }
-              if (!srcAttr || srcAttr === '' || srcAttr === '#') {
-                dbg('[asset warning] Found asset with empty src: ' + (el.id || el.tagName), 'warn');
-              }
-
-              el.addEventListener('load', function () {
-                dbg('[asset load] ' + (el.id || el.src));
-              });
-              el.addEventListener('error', function () {
-                dbg('[asset error] Failed to load: ' + (el.id || el.src), 'err');
-              });
-
-              if (el.tagName === 'IMG' && el.complete) {
-                if (el.naturalWidth === 0) {
-                  dbg('[asset error] Failed to load: ' + (el.id || el.src), 'err');
-                } else {
-                  dbg('[asset load] already complete: ' + (el.id || el.src));
-                }
-              }
-            })(children[i]);
-          }
-
-          assets.addEventListener('loaded', function () {
-            dbg('[a-assets] loaded');
-          });
-          assets.addEventListener('timeout', function () {
-            dbg('[a-assets] timeout reached. Forcing scene load.');
-            forceSceneReady('a-assets timeout');
-          });
-        }
-
-        function attachSceneLogs() {
-          var scene = document.querySelector('a-scene');
-          if (!scene) {
-            dbg('[scene] a-scene not found at boot', 'err');
-            return;
-          }
-          dbg('[scene] hasLoaded=' + !!scene.hasLoaded);
-          scene.addEventListener('loaded', function () {
-            dbg('[scene] loaded event fired; hasLoaded=' + !!scene.hasLoaded);
-          });
-          scene.addEventListener('a-assets-loaded', function () {
-            dbg('[scene] a-assets-loaded event fired');
-            if (!scene.hasLoaded) {
-              if (typeof scene.play === 'function') {
-                try { scene.play(); } catch (e) { /* already playing */ }
-              }
-              scene.hasLoaded = true;
-              scene.emit('loaded');
-              dbg('[scene] forced loaded immediately after assets');
-            }
-          });
-
-          instrumentAssets();
         }
 
         function boot() {
-          el = document.getElementById('temp-debug-console');
-          if (!el) return;
-          lines.forEach(paint);
-          checkXr();
-          attachSceneLogs();
+          var scene = document.querySelector('a-scene');
+          if (!scene) return;
+          scene.addEventListener('a-assets-loaded', function () {
+            if (!scene.hasLoaded) forceSceneReady();
+          });
+          var assets = document.querySelector('a-assets');
+          if (assets) assets.addEventListener('timeout', forceSceneReady);
         }
 
         if (document.readyState === 'loading') {
@@ -211,9 +52,9 @@
          Sit above home screen (z-index 200) and modals (150). */
       .a-enter-ar {
         position: fixed !important;
-        bottom: 24px !important;
+        bottom: 100px !important; /* sit above the 80px bottom nav */
         right: 24px !important;
-        z-index: 10000 !important;
+        z-index: 60 !important;
       }
       .a-enter-ar-button {
         background-color: #007bff !important;
@@ -294,11 +135,12 @@
       #bottom-nav {
         position: fixed; bottom: 0; left: 0; width: 100%; height: 80px;
         background: rgba(255,255,255,0.95); display: none; justify-content: space-around;
-        align-items: center; z-index: 50; border-top: 1px solid #ccc;
+        align-items: center; z-index: 60; border-top: 1px solid #ccc;
+        pointer-events: auto;
       }
       .nav-btn { background: none; border: none; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 5px; }
       .nav-btn span { font-size: 11px; font-weight: bold; color: #333; }
-      .nav-icon { width: 28px; height: 28px; object-fit: contain; }
+      .nav-icon { width: 28px; height: 28px; object-fit: contain; display: block; }
 
       /* --- HINT BANNER (SLAM placement guidance) --- */
       #place-hint {
@@ -325,28 +167,6 @@
       .preset-btns button.active { background: #007bff; color: white; border-color: #007bff; }
       .continue-btn { background: #007bff; color: white; width: 100%; padding: 12px; border: none; border-radius: 8px; font-weight: bold; font-size: 16px; cursor: pointer; margin-top: 10px;}
       input[type=range] { width: 100%; cursor: pointer; accent-color: #007bff; }
-
-      /* --- TEMP DEBUG CONSOLE, remove before production --- */
-      #temp-debug-console {
-        position: fixed;
-        left: 0;
-        right: 0;
-        bottom: 0;
-        max-height: 40vh;
-        overflow-y: auto;
-        -webkit-overflow-scrolling: touch;
-        background: rgba(0, 0, 0, 0.75);
-        color: #7CFC00;
-        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-        font-size: 11px;
-        line-height: 1.35;
-        padding: 8px 10px;
-        z-index: 99999;
-        pointer-events: auto;
-        box-sizing: border-box;
-        word-break: break-word;
-        white-space: pre-wrap;
-      }
     </style>
   </head>
   <body>
@@ -509,7 +329,11 @@
           <span>HOME</span>
         </button>
         <button class="nav-btn" onclick="resetPlacement()">
-          <img src="Place.svg" class="nav-icon">
+          <!-- Place.svg is not in the repo; inline pin icon as fallback -->
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="#333" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 21s7-4.5 7-11a7 7 0 1 0-14 0c0 6.5 7 11 7 11z"></path>
+            <circle cx="12" cy="10" r="2.5"></circle>
+          </svg>
           <span>PLACE</span>
         </button>
         <button class="nav-btn" onclick="openModal('zoom-modal')">
@@ -555,11 +379,6 @@
 
     </div><!-- /#dom-overlay -->
 
-    <!-- --- TEMP DEBUG CONSOLE, remove before production ---
-         Kept outside #dom-overlay so it does not become WebXR overlay content
-         or steal hit-test / overlay semantics. High z-index only. -->
-    <div id="temp-debug-console"></div>
-
     <!-- JAVASCRIPT LOGIC -->
     <script>
       let currentZoom = 1;
@@ -599,10 +418,7 @@
         resetPlacement();
 
         var scene = document.querySelector('a-scene');
-        if (!scene) {
-          dbg('[ar] a-scene not found', 'err');
-          return;
-        }
+        if (!scene) return;
 
         // Failsafe: if the scene still thinks it isn't loaded, force it NOW
         // so enterAR() doesn't throw, keeping us in the click stack (user gesture).
@@ -614,22 +430,15 @@
           scene.emit('loaded');
         }
 
-        if (scene.is('vr-mode') || scene.is('ar-mode')) {
-          dbg('[AR] already in session, skip enterAR');
-          return;
-        }
+        if (scene.is('vr-mode') || scene.is('ar-mode')) return;
 
-        dbg('[AR] Launching enterAR() synchronously');
         try {
           var p = scene.enterAR();
           if (p && typeof p.then === 'function') {
-            p.then(function () { dbg('[AR] enterAR resolved'); })
-             .catch(function (e) {
-               dbg('[AR] enterAR failed: ' + ((e && e.message) ? e.message : e), 'err');
-             });
+            p.catch(function (e) { console.error('enterAR failed', e); });
           }
         } catch (e) {
-          dbg('[AR] enterAR threw: ' + ((e && e.message) ? e.message : e), 'err');
+          console.error('enterAR threw', e);
         }
       }
 
@@ -661,10 +470,6 @@
         if (scene && (scene.is('vr-mode') || scene.is('ar-mode'))) {
           scene.exitVR();
         }
-      }
-
-      function dbg(msg, kind) {
-        if (typeof window.__tempDbg === 'function') window.__tempDbg(msg, kind);
       }
 
       // SLAM placement: re-show the reticle so the user can tap a new spot
