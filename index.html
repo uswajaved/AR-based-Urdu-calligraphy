@@ -16,7 +16,7 @@
         function paint(entry) {
           if (!el) return;
           var row = document.createElement('div');
-          row.style.color = entry.kind === 'err' ? '#ff5555' : '#7CFC00';
+          row.style.color = entry.kind === 'err' ? '#ff5555' : (entry.kind === 'warn' ? '#ffcc00' : '#7CFC00');
           row.textContent = entry.msg;
           el.appendChild(row);
           el.scrollTop = el.scrollHeight;
@@ -27,6 +27,31 @@
           lines.push(entry);
           paint(entry);
         }
+        window.__tempDbg = dbg;
+
+        function argsToString(args) {
+          var out = [];
+          for (var i = 0; i < args.length; i++) {
+            var a = args[i];
+            if (a == null) { out.push(String(a)); continue; }
+            if (typeof a === 'string') { out.push(a); continue; }
+            if (a instanceof Error) { out.push(a.stack || a.message); continue; }
+            try { out.push(JSON.stringify(a)); }
+            catch (e) { out.push(String(a)); }
+          }
+          return out.join(' ');
+        }
+
+        var origError = console.error;
+        var origWarn = console.warn;
+        console.error = function () {
+          dbg('[console.error] ' + argsToString(arguments), 'err');
+          return origError.apply(console, arguments);
+        };
+        console.warn = function () {
+          dbg('[console.warn] ' + argsToString(arguments), 'warn');
+          return origWarn.apply(console, arguments);
+        };
 
         window.onerror = function (message, source, lineno, colno, error) {
           dbg('[onerror] ' + message + ' @ ' + source + ':' + lineno + ':' + colno, 'err');
@@ -58,11 +83,36 @@
           }
         }
 
+        function attachSceneLogs() {
+          var scene = document.querySelector('a-scene');
+          if (!scene) {
+            dbg('[scene] a-scene not found at boot', 'err');
+            return;
+          }
+          dbg('[scene] hasLoaded=' + !!scene.hasLoaded);
+          scene.addEventListener('loaded', function () {
+            dbg('[scene] loaded event fired');
+          });
+          scene.addEventListener('a-assets-loaded', function () {
+            dbg('[scene] a-assets-loaded event fired');
+          });
+          var assets = scene.querySelector('a-assets');
+          if (assets) {
+            assets.addEventListener('loaded', function () {
+              dbg('[a-assets] loaded');
+            });
+            assets.addEventListener('timeout', function () {
+              dbg('[a-assets] timeout — continuing without waiting for remaining assets', 'warn');
+            });
+          }
+        }
+
         function boot() {
           el = document.getElementById('temp-debug-console');
           if (!el) return;
           lines.forEach(paint);
           checkXr();
+          attachSceneLogs();
         }
 
         if (document.readyState === 'loading') {
@@ -76,14 +126,15 @@
     <style>
       body { margin: 0; overflow: hidden; font-family: sans-serif; }
 
-      /* Restyle (rather than hide) A-Frame's built-in Enter-AR button so it
-         matches the app. A-Frame automatically swaps this to "ENTER AR"
-         instead of "ENTER VR" when the browser supports immersive-ar. */
-      .a-enter-vr {
-        bottom: 100px !important; /* sit above the bottom nav */
-        z-index: 60 !important;
+      /* A-Frame 1.7.0 xr-mode-ui="XRMode: ar" creates .a-enter-ar (not .a-enter-vr).
+         Sit above home screen (z-index 200) and modals (150). */
+      .a-enter-ar {
+        position: fixed !important;
+        bottom: 24px !important;
+        right: 24px !important;
+        z-index: 10000 !important;
       }
-      .a-enter-vr-button {
+      .a-enter-ar-button {
         background-color: #007bff !important;
         border-radius: 50% !important;
       }
@@ -229,9 +280,10 @@
     <a-scene
       webxr="optionalFeatures: hit-test, local-floor, dom-overlay; overlayElement: #dom-overlay;"
       renderer="colorManagement: true; physicallyCorrectLights: true;"
-      xr-mode-ui="XRMode: ar">
+      xr-mode-ui="XRMode: ar"
+      loading-screen="enabled: false">
 
-      <a-assets>
+      <a-assets timeout="2000">
         <img id="alif-img" src="Alif.svg" crossorigin="anonymous">
       </a-assets>
 
@@ -462,6 +514,7 @@
         });
 
         resetPlacement();
+        enterARWhenReady();
       }
 
       // Called from the Top Nav Scroller
@@ -488,6 +541,47 @@
         document.getElementById('place-hint').style.display = 'none';
         document.querySelector('#letter-anchor').setAttribute('visible', false);
         document.querySelector('#reticle').setAttribute('visible', false);
+        const scene = document.querySelector('a-scene');
+        if (scene && scene.is('vr-mode')) {
+          scene.exitVR();
+        }
+      }
+
+      // Programmatic AR launch: A-Frame 1.7 still uses enterVR() for immersive-ar
+      // when xr-mode-ui XRMode is ar. Must run from a user gesture once hasLoaded.
+      function enterARWhenReady() {
+        const scene = document.querySelector('a-scene');
+        const log = (typeof window.__tempDbg === 'function') ? window.__tempDbg : function () {};
+        if (!scene) {
+          log('[ar] a-scene not found', 'err');
+          return;
+        }
+
+        const start = () => {
+          if (scene.is('vr-mode')) {
+            log('[ar] already in session, skip enterVR');
+            return;
+          }
+          log('[ar] calling enterVR() hasLoaded=' + !!scene.hasLoaded);
+          try {
+            const p = scene.enterVR();
+            if (p && typeof p.then === 'function') {
+              p.then(function () { log('[ar] enterVR resolved'); })
+               .catch(function (e) {
+                 log('[ar] enterVR failed: ' + ((e && e.message) ? e.message : e), 'err');
+               });
+            }
+          } catch (e) {
+            log('[ar] enterVR threw: ' + ((e && e.message) ? e.message : e), 'err');
+          }
+        };
+
+        if (scene.hasLoaded) {
+          start();
+        } else {
+          log('[ar] waiting for scene loaded before enterVR');
+          scene.addEventListener('loaded', start, { once: true });
+        }
       }
 
       // SLAM placement: re-show the reticle so the user can tap a new spot
