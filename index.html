@@ -28,6 +28,7 @@
           paint(entry);
         }
         window.__tempDbg = dbg;
+        window.dbg = dbg;
 
         function argsToString(args) {
           var out = [];
@@ -83,6 +84,90 @@
           }
         }
 
+        function forceSceneReady(reason) {
+          var scene = document.querySelector('a-scene');
+          var assets = document.querySelector('a-assets');
+          dbg('[scene] force-resume: ' + reason, 'warn');
+          try {
+            if (assets && !assets.hasLoaded && typeof assets.load === 'function') {
+              assets.load();
+            }
+          } catch (e) {
+            dbg('[a-assets] load() threw: ' + e, 'err');
+          }
+          try {
+            // AEntity.load() ignores childFilter and will no-op if hasLoaded is
+            // already true. Register play()'s 'loaded' listener FIRST, then
+            // force-emit so the render loop still starts.
+            if (scene && !scene.hasLoaded) {
+              if (typeof scene.play === 'function') {
+                try { scene.play(); } catch (playErr) { /* already playing */ }
+              }
+              scene.hasLoaded = true;
+              if (typeof scene.emit === 'function') {
+                scene.emit('loaded-private', undefined, false);
+                scene.emit('loaded', undefined, false);
+              }
+              dbg('[scene] emitted loaded (hasLoaded forced true)');
+            }
+          } catch (e) {
+            dbg('[scene] force loaded threw: ' + e, 'err');
+          }
+        }
+
+        function instrumentAssets() {
+          var assets = document.querySelector('a-assets');
+          if (!assets) {
+            dbg('[asset warning] no a-assets element', 'warn');
+            return;
+          }
+
+          var children = assets.children;
+          dbg('[asset] child count=' + children.length);
+
+          for (var i = 0; i < children.length; i++) {
+            (function (el) {
+              var srcAttr = el.getAttribute('src');
+              dbg('[asset] ' + el.tagName + ' id=' + (el.id || '(none)') + ' src=' + JSON.stringify(srcAttr));
+
+              if (!el.id) {
+                dbg('[asset warning] asset missing id: ' + el.tagName, 'warn');
+              }
+              if (!srcAttr || srcAttr === '' || srcAttr === '#') {
+                dbg('[asset warning] Found asset with empty src: ' + (el.id || el.tagName), 'warn');
+              }
+
+              el.addEventListener('load', function () {
+                dbg('[asset load] ' + (el.id || el.src));
+              });
+              el.addEventListener('error', function () {
+                dbg('[asset error] Failed to load: ' + (el.id || el.src), 'err');
+              });
+
+              if (el.tagName === 'IMG' && el.complete) {
+                if (el.naturalWidth === 0) {
+                  dbg('[asset error] Failed to load: ' + (el.id || el.src), 'err');
+                } else {
+                  dbg('[asset load] already complete: ' + (el.id || el.src));
+                }
+              }
+            })(children[i]);
+          }
+
+          assets.addEventListener('loaded', function () {
+            dbg('[a-assets] loaded');
+          });
+          assets.addEventListener('timeout', function () {
+            dbg('[a-assets] timeout reached. Forcing scene load.');
+            setTimeout(function () {
+              var scene = document.querySelector('a-scene');
+              if (scene && !scene.hasLoaded) {
+                forceSceneReady('hasLoaded still false 500ms after a-assets timeout');
+              }
+            }, 500);
+          });
+        }
+
         function attachSceneLogs() {
           var scene = document.querySelector('a-scene');
           if (!scene) {
@@ -91,20 +176,20 @@
           }
           dbg('[scene] hasLoaded=' + !!scene.hasLoaded);
           scene.addEventListener('loaded', function () {
-            dbg('[scene] loaded event fired');
+            dbg('[scene] loaded event fired; hasLoaded=' + !!scene.hasLoaded);
           });
           scene.addEventListener('a-assets-loaded', function () {
             dbg('[scene] a-assets-loaded event fired');
           });
-          var assets = scene.querySelector('a-assets');
-          if (assets) {
-            assets.addEventListener('loaded', function () {
-              dbg('[a-assets] loaded');
-            });
-            assets.addEventListener('timeout', function () {
-              dbg('[a-assets] timeout — continuing without waiting for remaining assets', 'warn');
-            });
-          }
+
+          instrumentAssets();
+
+          // Watchdog: if A-Frame never emits timeout/loaded (hung img/texture), unblock anyway.
+          setTimeout(function () {
+            if (scene && !scene.hasLoaded) {
+              forceSceneReady('watchdog 2500ms, scene still not loaded');
+            }
+          }, 2500);
         }
 
         function boot() {
@@ -284,7 +369,9 @@
       loading-screen="enabled: false">
 
       <a-assets timeout="2000">
-        <img id="alif-img" src="Alif.svg" crossorigin="anonymous">
+        <!-- Only files that exist in this folder. Alif.svg / Place.svg are NOT
+             in the repo and must not block scene.hasLoaded. Baa.svg is. -->
+        <img id="baa-img" src="Baa.svg">
       </a-assets>
 
       <!-- Reticle: shows where the letter WOULD land. `ar-hit-test` continuously
@@ -303,7 +390,7 @@
       <a-entity id="letter-anchor" visible="false">
         <a-image
           id="urdu-letter"
-          src="#alif-img"
+          src="#baa-img"
           position="0 0.01 0"
           scale="0.3 0.3 0.3"
           rotation="-90 0 0"
@@ -547,39 +634,42 @@
         }
       }
 
+      function dbg(msg, kind) {
+        if (typeof window.__tempDbg === 'function') window.__tempDbg(msg, kind);
+      }
+
       // Programmatic AR launch: A-Frame 1.7 still uses enterVR() for immersive-ar
       // when xr-mode-ui XRMode is ar. Must run from a user gesture once hasLoaded.
       function enterARWhenReady() {
         const scene = document.querySelector('a-scene');
-        const log = (typeof window.__tempDbg === 'function') ? window.__tempDbg : function () {};
         if (!scene) {
-          log('[ar] a-scene not found', 'err');
+          dbg('[ar] a-scene not found', 'err');
           return;
         }
 
         const start = () => {
           if (scene.is('vr-mode')) {
-            log('[ar] already in session, skip enterVR');
+            dbg('[ar] already in session, skip enterVR');
             return;
           }
-          log('[ar] calling enterVR() hasLoaded=' + !!scene.hasLoaded);
+          dbg('[ar] calling enterVR() hasLoaded=' + !!scene.hasLoaded);
           try {
             const p = scene.enterVR();
             if (p && typeof p.then === 'function') {
-              p.then(function () { log('[ar] enterVR resolved'); })
+              p.then(function () { dbg('[ar] enterVR resolved'); })
                .catch(function (e) {
-                 log('[ar] enterVR failed: ' + ((e && e.message) ? e.message : e), 'err');
+                 dbg('[ar] enterVR failed: ' + ((e && e.message) ? e.message : e), 'err');
                });
             }
           } catch (e) {
-            log('[ar] enterVR threw: ' + ((e && e.message) ? e.message : e), 'err');
+            dbg('[ar] enterVR threw: ' + ((e && e.message) ? e.message : e), 'err');
           }
         };
 
         if (scene.hasLoaded) {
           start();
         } else {
-          log('[ar] waiting for scene loaded before enterVR');
+          dbg('[AR] Scene not ready, queuing AR launch...');
           scene.addEventListener('loaded', start, { once: true });
         }
       }
