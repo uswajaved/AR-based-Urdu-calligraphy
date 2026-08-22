@@ -168,6 +168,82 @@
           });
         }
 
+        function entityLabel(el) {
+          if (el.id) return '#' + el.id;
+          var extra = '';
+          if (el.hasAttribute('camera')) extra = '[camera]';
+          return '<' + el.tagName.toLowerCase() + extra + '>';
+        }
+
+        var pendingEntities = [];
+
+        function instrumentEntities(scene) {
+          pendingEntities = [];
+          var nodes = scene.querySelectorAll(
+            'a-entity, a-image, a-camera, a-box, a-plane, a-sky, a-light, a-text, a-assets'
+          );
+          dbg('[entity] tracking ' + nodes.length + ' nodes inside a-scene');
+
+          for (var i = 0; i < nodes.length; i++) {
+            (function (el) {
+              var label = entityLabel(el);
+              if (el.hasLoaded) {
+                dbg('[entity] already loaded: ' + label);
+                return;
+              }
+              pendingEntities.push(el);
+              dbg('[entity] pending: ' + label);
+              el.addEventListener('loaded', function () {
+                pendingEntities = pendingEntities.filter(function (e) { return e !== el; });
+                dbg('[entity] loaded: ' + label);
+              });
+            })(nodes[i]);
+          }
+
+          function checkHitTestTarget(el) {
+            var raw = el.getAttribute('ar-hit-test');
+            if (raw == null || raw === false || raw === '') return;
+            var target = null;
+            if (typeof raw === 'string') {
+              var m = /target:\s*([^;]+)/.exec(raw);
+              if (m) target = m[1].trim();
+            } else if (raw && raw.target) {
+              target = String(raw.target);
+            }
+            if (!target) {
+              dbg('[hit-test] ' + entityLabel(el) + ' has ar-hit-test but no target', 'warn');
+              return;
+            }
+            var found = null;
+            try { found = document.querySelector(target); } catch (e) { found = null; }
+            if (found) {
+              dbg('[hit-test] ' + entityLabel(el) + ' target ' + target + ' exists in DOM');
+            } else {
+              dbg('[hit-test] ' + entityLabel(el) + ' target ' + target + ' NOT FOUND in DOM', 'err');
+            }
+          }
+
+          checkHitTestTarget(scene);
+          var hitEls = scene.querySelectorAll('[ar-hit-test]');
+          for (var j = 0; j < hitEls.length; j++) checkHitTestTarget(hitEls[j]);
+        }
+
+        function pendingEntityLabels() {
+          if (!pendingEntities.length) return '(none)';
+          return pendingEntities.map(function (el) {
+            var label = entityLabel(el);
+            var comps = [];
+            if (el.components) {
+              comps = Object.keys(el.components);
+            } else {
+              ['ar-hit-test', 'geometry', 'material', 'camera', 'visible'].forEach(function (a) {
+                if (el.hasAttribute(a)) comps.push(a);
+              });
+            }
+            return comps.length ? (label + ' (' + comps.join(', ') + ')') : label;
+          }).join(', ');
+        }
+
         function attachSceneLogs() {
           var scene = document.querySelector('a-scene');
           if (!scene) {
@@ -183,10 +259,13 @@
           });
 
           instrumentAssets();
+          instrumentEntities(scene);
 
-          // Watchdog: if A-Frame never emits timeout/loaded (hung img/texture), unblock anyway.
+          // Watchdog: if A-Frame never emits timeout/loaded (hung entity/texture),
+          // log the culprits then unblock.
           setTimeout(function () {
             if (scene && !scene.hasLoaded) {
+              dbg('[scene watchdog] Hanging entities: ' + pendingEntityLabels(), 'err');
               forceSceneReady('watchdog 2500ms, scene still not loaded');
             }
           }, 2500);
@@ -399,7 +478,7 @@
         </a-image>
       </a-entity>
 
-      <a-entity camera></a-entity>
+      <a-entity id="camera" camera></a-entity>
     </a-scene>
 
     <!-- Placement guidance shown while looking for a surface / after placing -->
