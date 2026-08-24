@@ -601,6 +601,23 @@
             ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)'; // Black pen body
             ctx.stroke();
 
+                        // --- DRAW TARGET PATH (Ghost Guide) ---
+            if (currentTargetPath.length > 0) {
+              ctx.beginPath();
+              // Move to the first point (remembering to mirror the X)
+              let firstPoint = currentTargetPath[0];
+              ctx.moveTo((1.0 - firstPoint.x) * canvasEl.width, firstPoint.y * canvasEl.height);
+              
+              // Draw lines to the rest of the points
+              for (let i = 1; i < currentTargetPath.length; i++) {
+                let p = currentTargetPath[i];
+                ctx.lineTo((1.0 - p.x) * canvasEl.width, p.y * canvasEl.height);
+              }
+              ctx.lineWidth = 8;
+              ctx.strokeStyle = 'rgba(0, 123, 255, 0.5)'; // Blue line to trace
+              ctx.stroke();
+            }
+            
             // --- PROXIMITY CHECK ---
             let isOnPath = false;
             if (currentTargetPath.length > 0) {
