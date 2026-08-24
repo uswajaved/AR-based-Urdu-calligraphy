@@ -23,6 +23,19 @@
       /* A-Frame canvas sits above the tracking canvas */
       .a-canvas { z-index: 2 !important; background: transparent !important; }
 
+      /* Force the a-scene/canvas into a positioned stacking context so the
+         z-index rule above actually applies. Without `position` set, a-scene
+         defaults to static positioning and z-index is silently ignored,
+         which is a common cause of "letter never appears" bugs. */
+      a-scene, .a-canvas {
+        position: fixed !important;
+        top: 0; left: 0;
+        width: 100% !important;
+        height: 100% !important;
+        z-index: 2 !important;
+        background: transparent !important;
+      }
+
       /* Existing UI layers need to sit above the A-Frame canvas */
       #home-screen { z-index: 200; } /* Already set, but good to reinforce */
       #dom-overlay { z-index: 150; } /* Wraps nav and modals */
