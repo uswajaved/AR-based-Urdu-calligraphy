@@ -366,6 +366,11 @@
       let canvasEl = null;
       let ctx = null;
       let placeHintTimeout = null;
+      
+      // Ink and Progress variables
+      let inkTrail = []; // Stores the points drawn by the pen
+      let completedPoints = new Set(); // Stores indices of target points hit
+      let letterComplete = false; // Prevents multiple success triggers
 
       // Normalized coordinates (0.0 to 1.0) mapping the ideal trace path.
       // X goes left-to-right, Y goes top-to-bottom (standard image coords).
@@ -417,10 +422,14 @@
           letterEl.setAttribute('src', filename);
         }
 
-        // NEW: Update the active targetPath for your MediaPipe feedback logic
         currentTargetPath = letterPaths[filename] || [];
 
-        // Update the active state in the top scroller
+        // Clear ink and progress for the new letter
+        inkTrail = [];
+        completedPoints.clear();
+        letterComplete = false;
+        document.getElementById('place-hint').textContent = 'Hold phone steady and trace the letter';
+
         let navLetters = document.querySelectorAll('.nav-letter');
         navLetters.forEach(el => {
           el.classList.remove('active');
@@ -430,8 +439,6 @@
           }
         });
 
-        // REMOVED: enterAR() and forceSceneReady() hacks.
-        // Instead, just reveal the ghost letter at its fixed position.
         resetPlacement();
       }
 
@@ -442,8 +449,13 @@
           letterEl.setAttribute('src', filename);
         }
 
-        // NEW: Update the active targetPath
         currentTargetPath = letterPaths[filename] || [];
+
+        // Clear ink and progress for the new letter
+        inkTrail = [];
+        completedPoints.clear();
+        letterComplete = false;
+        document.getElementById('place-hint').textContent = 'Hold phone steady and trace the letter';
 
         document.querySelectorAll('.nav-letter').forEach(el => el.classList.remove('active'));
         element.classList.add('active');
@@ -563,7 +575,7 @@
         // Kick off the loop
         processFrame();
 
-        // --- 4. ON RESULTS CALLBACK (Draw dot & check proximity) ---
+        // --- 4. ON RESULTS CALLBACK (Draw dot, check proximity, draw ink, check success) ---
         function onResults(results) {
           // Match canvas internal size to video element to keep coordinates 1:1
           if (canvasEl.width !== videoEl.videoWidth) {
@@ -577,79 +589,98 @@
           if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
             const landmarks = results.multiHandLandmarks[0];
             
-            // --- NEW: VIRTUAL PEN/NIB TRACKING LOGIC ---
-            // Landmark 5 is the knuckle at the base of the index finger
-            // Landmark 8 is the tip of the index finger
+            // --- VIRTUAL PEN/NIB TRACKING LOGIC ---
             const indexMcp = landmarks[5]; 
             const indexTip = landmarks[8]; 
 
-            // Calculate the direction vector from knuckle to fingertip
             const dirX = indexTip.x - indexMcp.x;
             const dirY = indexTip.y - indexMcp.y;
-
-            // Extend the point outward to simulate a pen nib.
             const PEN_LENGTH_FACTOR = 0.8; 
             
             const penTipX = indexTip.x + (dirX * PEN_LENGTH_FACTOR);
             const penTipY = indexTip.y + (dirY * PEN_LENGTH_FACTOR);
 
-            // --- DRAWING THE PEN NIB ---
-            // Map normalized coords to canvas pixels
             const x = penTipX * canvasEl.width;
             const y = penTipY * canvasEl.height;
 
-            // Optional: Draw a line from the finger to the pen tip to show the "pen"
+            // Draw line from finger to pen tip
             ctx.beginPath();
             ctx.moveTo(indexTip.x * canvasEl.width, indexTip.y * canvasEl.height);
             ctx.lineTo(x, y);
             ctx.lineWidth = 6;
-            ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)'; // Black pen body
+            ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)'; 
             ctx.stroke();
 
-                        // --- DRAW TARGET PATH (Ghost Guide) ---
+            // --- DRAW TARGET PATH (Ghost Guide) ---
             if (currentTargetPath.length > 0) {
               ctx.beginPath();
-              // Move to the first point (remembering to mirror the X)
               let firstPoint = currentTargetPath[0];
               ctx.moveTo((1.0 - firstPoint.x) * canvasEl.width, firstPoint.y * canvasEl.height);
-              
-              // Draw lines to the rest of the points
               for (let i = 1; i < currentTargetPath.length; i++) {
                 let p = currentTargetPath[i];
                 ctx.lineTo((1.0 - p.x) * canvasEl.width, p.y * canvasEl.height);
               }
               ctx.lineWidth = 8;
-              ctx.strokeStyle = 'rgba(0, 123, 255, 0.5)'; // Blue line to trace
+              ctx.strokeStyle = 'rgba(0, 123, 255, 0.3)'; // Faint blue line to trace
               ctx.stroke();
             }
-            
-            // --- PROXIMITY CHECK ---
+
+            // --- PROXIMITY & PROGRESS CHECK ---
             let isOnPath = false;
-            if (currentTargetPath.length > 0) {
-              // Because the canvas is visually mirrored via CSS scaleX(-1), 
-              // we must invert the X coordinate to compare it against the target path
+            if (currentTargetPath.length > 0 && !letterComplete) {
               const mirroredX = 1.0 - penTipX; 
               
               let minDist = Infinity;
-              for (let p of currentTargetPath) {
-                const dist = Math.hypot(mirroredX - p.x, penTipY - p.y);
-                if (dist < minDist) minDist = dist;
+              let nearestIdx = -1;
+              for (let i = 0; i < currentTargetPath.length; i++) {
+                let p = currentTargetPath[i];
+                let dist = Math.hypot(mirroredX - p.x, penTipY - p.y);
+                if (dist < minDist) {
+                  minDist = dist;
+                  nearestIdx = i;
+                }
               }
 
               // If pen nib is within 10% of screen width to the path, it's "on target"
               if (minDist < 0.1) {
                 isOnPath = true;
+                completedPoints.add(nearestIdx); // Mark this point as hit
+                
+                // Add to ink trail (using unmirrored X so it draws correctly on the CSS-mirrored canvas)
+                inkTrail.push({ x: penTipX, y: penTipY });
               }
             }
 
-            // Draw the pen nib dot
+            // --- DRAW INK TRAIL ---
+            if (inkTrail.length > 1) {
+              ctx.beginPath();
+              ctx.moveTo(inkTrail[0].x * canvasEl.width, inkTrail[0].y * canvasEl.height);
+              for (let i = 1; i < inkTrail.length; i++) {
+                ctx.lineTo(inkTrail[i].x * canvasEl.width, inkTrail[i].y * canvasEl.height);
+              }
+              ctx.lineWidth = 10;
+              ctx.strokeStyle = 'rgba(0, 0, 0, 0.9)'; // Black ink!
+              ctx.lineCap = 'round';
+              ctx.lineJoin = 'round';
+              ctx.stroke();
+            }
+
+            // --- DRAW PEN NIB ---
             ctx.beginPath();
-            ctx.arc(x, y, 12, 0, 2 * Math.PI); // slightly smaller dot to look like a nib
-            ctx.fillStyle = isOnPath ? 'rgba(0, 255, 0, 0.9)' : 'rgba(255, 0, 0, 0.9)'; // Green if on path, Red if off
+            ctx.arc(x, y, 12, 0, 2 * Math.PI); 
+            ctx.fillStyle = isOnPath ? 'rgba(0, 255, 0, 0.9)' : 'rgba(255, 0, 0, 0.9)'; 
             ctx.fill();
             ctx.lineWidth = 3;
             ctx.strokeStyle = '#fff';
             ctx.stroke();
+
+            // --- CHECK FOR SUCCESS ---
+            if (!letterComplete && currentTargetPath.length > 0 && completedPoints.size === currentTargetPath.length) {
+              letterComplete = true;
+              document.getElementById('place-hint').textContent = '✅ Letter Complete! Tap another letter to try again.';
+              document.getElementById('place-hint').style.display = 'block';
+              if (placeHintTimeout) clearTimeout(placeHintTimeout); // Keep it visible until they switch
+            }
           }
         }
       });
