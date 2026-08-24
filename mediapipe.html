@@ -1,0 +1,511 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Urdu Calligraphy AR</title>
+    <!-- AR.js and the marker/pattern system have been removed.
+         WebXR hit-test / SLAM placement has also been removed in favor of
+         a MediaPipe hand-tracking camera passthrough (Phase 2). -->
+    <script src="https://aframe.io/releases/1.7.0/aframe.min.js"></script>
+    <style>
+      body { margin: 0; overflow: hidden; font-family: sans-serif; }
+
+      /* --- CAMERA PASSTHROUGH & TRACKING LAYERS --- */
+      #cam-video, #tracking-canvas {
+        position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+        object-fit: cover; /* Video fills screen regardless of aspect ratio */
+        z-index: 0;
+      }
+      #tracking-canvas {
+        z-index: 1;
+        background: transparent; /* Let video show through */
+        transform: scaleX(-1); /* Mirror the canvas to match user movement */
+      }
+      /* A-Frame canvas sits above the tracking canvas */
+      .a-canvas { z-index: 2 !important; background: transparent !important; }
+
+      /* Her existing UI layers need to sit above the A-Frame canvas */
+      #home-screen { z-index: 200; } /* Already set, but good to reinforce */
+      #dom-overlay { z-index: 150; } /* Wraps nav and modals */
+
+      /* A-Frame 1.7.0 xr-mode-ui="XRMode: ar" creates .a-enter-ar (not .a-enter-vr).
+         Sit above home screen (z-index 200) and modals (150). */
+      .a-enter-ar {
+        position: fixed !important;
+        bottom: 100px !important; /* sit above the 80px bottom nav */
+        right: 24px !important;
+        z-index: 60 !important;
+      }
+      .a-enter-ar-button {
+        background-color: #007bff !important;
+        border-radius: 50% !important;
+      }
+
+      /* --- HOME SCREEN --- */
+      #home-screen {
+        position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+        background: white; z-index: 200; display: flex; flex-direction: column;
+        align-items: center; padding-top: 40px;
+      }
+      .tab-header { display: flex; gap: 20px; margin-bottom: 20px; font-weight: bold; font-size: 18px; }
+      .tab-header span { cursor: pointer; color: #999; }
+      .tab-header span.active { color: #007bff; border-bottom: 2px solid #007bff; }
+      .letter-grid {
+        display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px;
+        width: 90%; max-width: 400px;
+        /* RTL so the grid reads right-to-left, top-right first, like Urdu */
+        direction: rtl;
+      }
+      .letter-box {
+        background: #f0f0f0; aspect-ratio: 1; display: flex; align-items: center;
+        justify-content: center; font-size: 32px; cursor: pointer; border-radius: 8px;
+        color: black; font-weight: bold;
+      }
+      .letter-box:hover { background: #ddd; }
+
+      /* --- AR VIEW NAVIGATION --- */
+
+      /* Top Nav (Horizontal Scroller made of letter-box cards) */
+      #top-nav {
+        position: fixed; top: 15px; left: 0; width: 100%; height: 70px;
+        z-index: 50; display: none; align-items: center; justify-content: center;
+        gap: 10px;
+      }
+      .chevron {
+        background: rgba(0,0,0,0.85); border: none; width: 36px; height: 36px;
+        border-radius: 50%; font-size: 16px; cursor: pointer; z-index: 10;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.3); color: #fff; font-weight: bold;
+        flex-shrink: 0; display: flex; align-items: center; justify-content: center;
+        padding: 0;
+      }
+      .chevron:active { background: rgba(0,0,0,1); }
+
+      .letter-scroller {
+        display: flex; gap: 12px; overflow-x: auto; scroll-behavior: smooth;
+        -webkit-overflow-scrolling: touch; touch-action: pan-x;
+        scroll-snap-type: x proximity;
+        max-width: 260px; padding: 4px 2px;
+        /* RTL so Alif (first in the list) anchors on the right, and later
+           letters extend to the left — matching Urdu reading direction */
+        direction: rtl;
+        /* Hide scrollbar for cleaner look */
+        -ms-overflow-style: none; scrollbar-width: none;
+      }
+      .letter-scroller::-webkit-scrollbar { display: none; }
+
+      .nav-letter {
+        direction: ltr; /* keep each glyph rendering normally */
+        flex-shrink: 0; scroll-snap-align: center;
+        width: 54px; height: 54px;
+        background: #f0f0f0; border-radius: 10px;
+        display: flex; align-items: center; justify-content: center;
+        font-size: 26px; font-weight: bold; color: black;
+        cursor: pointer; user-select: none;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+        transition: background 0.15s, color 0.15s, transform 0.15s;
+      }
+      .nav-letter.active {
+        background: #007bff; color: #fff;
+        box-shadow: 0 2px 8px rgba(0,123,255,0.4);
+        transform: scale(1.05);
+      }
+
+      /* Bottom Nav (Icons + Text) */
+      #bottom-nav {
+        position: fixed; bottom: 0; left: 0; width: 100%; height: 80px;
+        background: rgba(255,255,255,0.95); display: none; justify-content: space-around;
+        align-items: center; z-index: 60; border-top: 1px solid #ccc;
+        pointer-events: auto;
+      }
+      .nav-btn { background: none; border: none; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 5px; }
+      .nav-btn span { font-size: 11px; font-weight: bold; color: #333; }
+      .nav-icon { width: 28px; height: 28px; object-fit: contain; display: block; }
+
+      /* --- HINT BANNER (SLAM placement guidance) --- */
+      #place-hint {
+        position: fixed; top: 15px; left: 50%; transform: translateX(-50%);
+        background: rgba(0,0,0,0.75); color: #fff; padding: 8px 16px;
+        border-radius: 20px; font-size: 13px; font-weight: bold;
+        z-index: 55; display: none; text-align: center; max-width: 80%;
+      }
+
+      /* --- MODALS --- */
+      .modal-overlay {
+        position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+        background: rgba(0,0,0,0.5); z-index: 150; display: none;
+        justify-content: center; align-items: center;
+      }
+      .modal-card {
+        background: white; width: 80%; max-width: 350px; border-radius: 12px;
+        padding: 20px; position: relative; text-align: center;
+      }
+      .close-x { position: absolute; top: 10px; right: 15px; font-size: 24px; cursor: pointer; color: #999; }
+      .modal-title { font-weight: bold; font-size: 18px; margin-bottom: 20px; }
+      .preset-btns { display: flex; justify-content: center; gap: 10px; margin: 20px 0; }
+      .preset-btns button { padding: 8px 16px; border: 1px solid #ddd; background: white; border-radius: 6px; cursor: pointer; font-weight: bold; color: #333;}
+      .preset-btns button.active { background: #007bff; color: white; border-color: #007bff; }
+      .continue-btn { background: #007bff; color: white; width: 100%; padding: 12px; border: none; border-radius: 8px; font-weight: bold; font-size: 16px; cursor: pointer; margin-top: 10px;}
+      input[type=range] { width: 100%; cursor: pointer; accent-color: #007bff; }
+    </style>
+  </head>
+  <body>
+
+    <!-- 1. CAMERA PASSTHROUGH STACK -->
+    <video id="cam-video" autoplay playsinline muted></video>
+    <canvas id="tracking-canvas"></canvas>
+
+    <!-- 2. A-FRAME OVERLAY (Ghost Letter only) -->
+    <a-scene
+      embedded
+      renderer="colorManagement: true; alpha: true; physicallyCorrectLights: true;"
+      vr-mode-ui="enabled: false"
+      loading-screen="enabled: false">
+
+      <a-assets timeout="2000">
+        <img id="baa-img" src="Baa.svg">
+        <!-- Add other letter assets here as they are created -->
+      </a-assets>
+
+      <!-- Fixed on-screen anchor. Z = -1 places it 1 meter in front of camera -->
+      <a-entity id="letter-anchor" visible="false">
+        <a-image
+          id="urdu-letter"
+          src="#baa-img"
+          position="0 0 -1"
+          scale="0.3 0.3 0.3"
+          rotation="-90 0 0"
+          side="double"
+          material="shader: flat; transparent: true; opacity: 0.5;">
+        </a-image>
+      </a-entity>
+
+      <a-entity id="camera" camera></a-entity>
+    </a-scene>
+
+    <!-- Placement guidance shown while looking for a surface / after placing -->
+    <div id="place-hint">Move your phone to find a surface, then tap to place</div>
+
+    <!-- 2. HOME SCREEN -->
+    <div id="home-screen">
+      <div class="tab-header">
+        <span class="active">HOME</span>
+        <span>LETTERS</span>
+        <span>WORDS</span>
+      </div>
+      <div class="letter-grid">
+        <div class="letter-box" onclick="selectLetter('Alif.svg', 'ا')">ا</div>
+        <div class="letter-box" onclick="selectLetter('Baa.svg', 'ب')">ب</div>
+        <div class="letter-box" onclick="selectLetter('Peh.svg', 'پ')">پ</div>
+        <div class="letter-box" onclick="selectLetter('Taa.svg', 'ت')">ت</div>
+        <div class="letter-box" onclick="selectLetter('Tay.svg', 'ٹ')">ٹ</div>
+        <div class="letter-box" onclick="selectLetter('Thaa.svg', 'ث')">ث</div>
+        <div class="letter-box" onclick="selectLetter('Jeem.svg', 'ج')">ج</div>
+        <div class="letter-box" onclick="selectLetter('Cheh.svg', 'چ')">چ</div>
+        <div class="letter-box" onclick="selectLetter('Haa.svg', 'ح')">ح</div>
+        <div class="letter-box" onclick="selectLetter('Khaa.svg', 'خ')">خ</div>
+        <div class="letter-box" onclick="selectLetter('Daal.svg', 'د')">د</div>
+        <div class="letter-box" onclick="selectLetter('Ddal.svg', 'ڈ')">ڈ</div>
+        <div class="letter-box" onclick="selectLetter('Zaal.svg', 'ذ')">ذ</div>
+        <div class="letter-box" onclick="selectLetter('Raa.svg', 'ر')">ر</div>
+        <div class="letter-box" onclick="selectLetter('Rreh.svg', 'ڑ')">ڑ</div>
+        <div class="letter-box" onclick="selectLetter('Zaa.svg', 'ز')">ز</div>
+        <div class="letter-box" onclick="selectLetter('Zheh.svg', 'ژ')">ژ</div>
+        <div class="letter-box" onclick="selectLetter('Seen.svg', 'س')">س</div>
+        <div class="letter-box" onclick="selectLetter('Sheen.svg', 'ش')">ش</div>
+        <div class="letter-box" onclick="selectLetter('Saad.svg', 'ص')">ص</div>
+        <div class="letter-box" onclick="selectLetter('Daad.svg', 'ض')">ض</div>
+        <div class="letter-box" onclick="selectLetter('Toa.svg', 'ط')">ط</div>
+        <div class="letter-box" onclick="selectLetter('Zoe.svg', 'ظ')">ظ</div>
+        <div class="letter-box" onclick="selectLetter('Ain.svg', 'ع')">ع</div>
+        <div class="letter-box" onclick="selectLetter('Ghain.svg', 'غ')">غ</div>
+        <div class="letter-box" onclick="selectLetter('Feh.svg', 'ف')">ف</div>
+        <div class="letter-box" onclick="selectLetter('Qaf.svg', 'ق')">ق</div>
+        <div class="letter-box" onclick="selectLetter('Kaf.svg', 'ک')">ک</div>
+        <div class="letter-box" onclick="selectLetter('Gaf.svg', 'گ')">گ</div>
+        <div class="letter-box" onclick="selectLetter('Lam.svg', 'ل')">ل</div>
+        <div class="letter-box" onclick="selectLetter('Meem.svg', 'م')">م</div>
+        <div class="letter-box" onclick="selectLetter('Noon.svg', 'ن')">ن</div>
+        <div class="letter-box" onclick="selectLetter('NoonGhunna.svg', 'ں')">ں</div>
+        <div class="letter-box" onclick="selectLetter('Wao.svg', 'و')">و</div>
+        <div class="letter-box" onclick="selectLetter('Heh.svg', 'ہ')">ہ</div>
+        <div class="letter-box" onclick="selectLetter('DoChashmiHeh.svg', 'ھ')">ھ</div>
+        <div class="letter-box" onclick="selectLetter('Hamza.svg', 'ء')">ء</div>
+        <div class="letter-box" onclick="selectLetter('Yeh.svg', 'ی')">ی</div>
+        <div class="letter-box" onclick="selectLetter('BariYeh.svg', 'ے')">ے</div>
+      </div>
+    </div>
+
+    <!-- 3. AR NAVIGATION (dom-overlay content — must live inside #dom-overlay
+         so it stays visible/interactive during the immersive-ar session) -->
+    <div id="dom-overlay">
+
+      <!-- Top Nav (Scroller made of letter-box cards) -->
+      <div id="top-nav">
+        <button class="chevron" onclick="scrollNav(-150)">&#10094;</button>
+        <div class="letter-scroller" id="letter-scroller">
+          <div class="nav-letter active" onclick="changeLetterNav('Alif.svg', this)">ا</div>
+          <div class="nav-letter" onclick="changeLetterNav('Baa.svg', this)">ب</div>
+          <div class="nav-letter" onclick="changeLetterNav('Peh.svg', this)">پ</div>
+          <div class="nav-letter" onclick="changeLetterNav('Taa.svg', this)">ت</div>
+          <div class="nav-letter" onclick="changeLetterNav('Tay.svg', this)">ٹ</div>
+          <div class="nav-letter" onclick="changeLetterNav('Thaa.svg', this)">ث</div>
+          <div class="nav-letter" onclick="changeLetterNav('Jeem.svg', this)">ج</div>
+          <div class="nav-letter" onclick="changeLetterNav('Cheh.svg', this)">چ</div>
+          <div class="nav-letter" onclick="changeLetterNav('Haa.svg', this)">ح</div>
+          <div class="nav-letter" onclick="changeLetterNav('Khaa.svg', this)">خ</div>
+          <div class="nav-letter" onclick="changeLetterNav('Daal.svg', this)">د</div>
+          <div class="nav-letter" onclick="changeLetterNav('Ddal.svg', this)">ڈ</div>
+          <div class="nav-letter" onclick="changeLetterNav('Zaal.svg', this)">ذ</div>
+          <div class="nav-letter" onclick="changeLetterNav('Raa.svg', this)">ر</div>
+          <div class="nav-letter" onclick="changeLetterNav('Rreh.svg', this)">ڑ</div>
+          <div class="nav-letter" onclick="changeLetterNav('Zaa.svg', this)">ز</div>
+          <div class="nav-letter" onclick="changeLetterNav('Zheh.svg', this)">ژ</div>
+          <div class="nav-letter" onclick="changeLetterNav('Seen.svg', this)">س</div>
+          <div class="nav-letter" onclick="changeLetterNav('Sheen.svg', this)">ش</div>
+          <div class="nav-letter" onclick="changeLetterNav('Saad.svg', this)">ص</div>
+          <div class="nav-letter" onclick="changeLetterNav('Daad.svg', this)">ض</div>
+          <div class="nav-letter" onclick="changeLetterNav('Toa.svg', this)">ط</div>
+          <div class="nav-letter" onclick="changeLetterNav('Zoe.svg', this)">ظ</div>
+          <div class="nav-letter" onclick="changeLetterNav('Ain.svg', this)">ع</div>
+          <div class="nav-letter" onclick="changeLetterNav('Ghain.svg', this)">غ</div>
+          <div class="nav-letter" onclick="changeLetterNav('Feh.svg', this)">ف</div>
+          <div class="nav-letter" onclick="changeLetterNav('Qaf.svg', this)">ق</div>
+          <div class="nav-letter" onclick="changeLetterNav('Kaf.svg', this)">ک</div>
+          <div class="nav-letter" onclick="changeLetterNav('Gaf.svg', this)">گ</div>
+          <div class="nav-letter" onclick="changeLetterNav('Lam.svg', this)">ل</div>
+          <div class="nav-letter" onclick="changeLetterNav('Meem.svg', this)">م</div>
+          <div class="nav-letter" onclick="changeLetterNav('Noon.svg', this)">ن</div>
+          <div class="nav-letter" onclick="changeLetterNav('NoonGhunna.svg', this)">ں</div>
+          <div class="nav-letter" onclick="changeLetterNav('Wao.svg', this)">و</div>
+          <div class="nav-letter" onclick="changeLetterNav('Heh.svg', this)">ہ</div>
+          <div class="nav-letter" onclick="changeLetterNav('DoChashmiHeh.svg', this)">ھ</div>
+          <div class="nav-letter" onclick="changeLetterNav('Hamza.svg', this)">ء</div>
+          <div class="nav-letter" onclick="changeLetterNav('Yeh.svg', this)">ی</div>
+          <div class="nav-letter" onclick="changeLetterNav('BariYeh.svg', this)">ے</div>
+        </div>
+        <button class="chevron" onclick="scrollNav(150)">&#10095;</button>
+      </div>
+
+      <!-- Bottom Nav (Icons + Text) -->
+      <div id="bottom-nav">
+        <button class="nav-btn" onclick="goHome()">
+          <img src="Home.svg" class="nav-icon">
+          <span>HOME</span>
+        </button>
+        <button class="nav-btn" onclick="resetPlacement()">
+          <!-- Place.svg is not in the repo; inline pin icon as fallback -->
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="#333" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 21s7-4.5 7-11a7 7 0 1 0-14 0c0 6.5 7 11 7 11z"></path>
+            <circle cx="12" cy="10" r="2.5"></circle>
+          </svg>
+          <span>PLACE</span>
+        </button>
+        <button class="nav-btn" onclick="openModal('zoom-modal')">
+          <img src="Zoom.svg" class="nav-icon">
+          <span>ZOOM</span>
+        </button>
+        <button class="nav-btn" onclick="openModal('opacity-modal')">
+          <img src="Opacity.svg" class="nav-icon">
+          <span>OPACITY</span>
+        </button>
+      </div>
+
+      <!-- 4. MODALS -->
+      <div class="modal-overlay" id="zoom-modal">
+        <div class="modal-card">
+          <span class="close-x" onclick="closeModal('zoom-modal')">&times;</span>
+          <div class="modal-title">Choose a zoom level</div>
+          <input type="range" id="zoom-slider" min="0.5" max="3" step="0.1" value="1" oninput="updateZoomPreview(this.value)">
+          <div class="preset-btns">
+            <button onclick="setZoom(1)">1x</button>
+            <button onclick="setZoom(1.5)">1.5x</button>
+            <button onclick="setZoom(2)">2x</button>
+            <button onclick="setZoom(2.5)">2.5x</button>
+          </div>
+          <button class="continue-btn" onclick="closeModal('zoom-modal')">CONTINUE</button>
+        </div>
+      </div>
+
+      <div class="modal-overlay" id="opacity-modal">
+        <div class="modal-card">
+          <span class="close-x" onclick="closeModal('opacity-modal')">&times;</span>
+          <div class="modal-title">Choose opacity level</div>
+          <input type="range" id="opacity-slider" min="0.1" max="1" step="0.1" value="0.5" oninput="updateOpacityPreview(this.value)">
+          <div class="preset-btns">
+            <button onclick="setOpacity(0.25)">25</button>
+            <button onclick="setOpacity(0.50)">50</button>
+            <button onclick="setOpacity(0.75)">75</button>
+            <button onclick="setOpacity(1.0)">100</button>
+          </div>
+          <button class="continue-btn" onclick="closeModal('opacity-modal')">CONTINUE</button>
+        </div>
+      </div>
+
+    </div><!-- /#dom-overlay -->
+
+    <!-- JAVASCRIPT LOGIC -->
+    <script>
+      let currentZoom = 1;
+      let currentOpacity = 0.5;
+      const BASE_SCALE = 0.3; // meters — keep AR content small per WebXR best practice
+
+      let currentTargetPath = [];
+
+      // Normalized coordinates (0.0 to 1.0) mapping the ideal trace path.
+      // X goes left-to-right, Y goes top-to-bottom (standard image coords).
+      // Since the video/canvas are mirrored, you'll define the path as if
+      // looking at the letter normally, and apply the scaleX(-1) to the canvas.
+      const letterPaths = {
+        'Alif.svg': [
+          { x: 0.5, y: 0.2 }, // Top center
+          { x: 0.5, y: 0.5 }, // Middle
+          { x: 0.5, y: 0.8 }  // Bottom center
+        ],
+        'Baa.svg': [
+          { x: 0.3, y: 0.8 }, // Start bottom left (curve)
+          { x: 0.3, y: 0.4 }, // Up
+          { x: 0.5, y: 0.2 }, // Curve right over top
+          { x: 0.7, y: 0.4 }, // Down right
+          { x: 0.7, y: 0.8 }  // Bottom right
+        ],
+        // Add others as assets are created
+      };
+
+      function applySettings() {
+        let letterEl = document.querySelector('#urdu-letter');
+        if (letterEl) {
+          const s = BASE_SCALE * currentZoom;
+          letterEl.setAttribute('scale', s + ' ' + s + ' 1');
+          letterEl.setAttribute('material', 'shader: flat; transparent: true; opacity: ' + currentOpacity);
+        }
+      }
+
+      // Called from the Home Screen Grid
+      function selectLetter(filename, character) {
+        document.querySelector('#home-screen').style.display = 'none';
+        document.querySelector('#top-nav').style.display = 'flex';
+        document.querySelector('#bottom-nav').style.display = 'flex';
+
+        let letterEl = document.querySelector('#urdu-letter');
+        if (letterEl) {
+          letterEl.setAttribute('src', filename);
+        }
+
+        // NEW: Update the active targetPath for your MediaPipe feedback logic
+        currentTargetPath = letterPaths[filename] || [];
+
+        // Update the active state in the top scroller
+        let navLetters = document.querySelectorAll('.nav-letter');
+        navLetters.forEach(el => {
+          el.classList.remove('active');
+          if (el.innerText === character) {
+            el.classList.add('active');
+            el.scrollIntoView({behavior: "smooth", inline: "center", block: "nearest"});
+          }
+        });
+
+        // REMOVED: enterAR() and forceSceneReady() hacks.
+        // Instead, just reveal the ghost letter at its fixed position.
+        resetPlacement();
+      }
+
+      // Called from the Top Nav Scroller
+      function changeLetterNav(filename, element) {
+        let letterEl = document.querySelector('#urdu-letter');
+        if (letterEl) {
+          letterEl.setAttribute('src', filename);
+        }
+
+        // NEW: Update the active targetPath
+        currentTargetPath = letterPaths[filename] || [];
+
+        document.querySelectorAll('.nav-letter').forEach(el => el.classList.remove('active'));
+        element.classList.add('active');
+        element.scrollIntoView({behavior: "smooth", inline: "center", block: "nearest"});
+      }
+
+      // Chevron scroll buttons
+      function scrollNav(amount) {
+        document.getElementById('letter-scroller').scrollBy({left: amount, behavior: 'smooth'});
+      }
+
+      function goHome() {
+        document.querySelector('#home-screen').style.display = 'flex';
+        document.querySelector('#top-nav').style.display = 'none';
+        document.querySelector('#bottom-nav').style.display = 'none';
+        document.getElementById('place-hint').style.display = 'none';
+        document.querySelector('#letter-anchor').setAttribute('visible', false);
+
+        // REMOVED: scene.exitVR().
+        // If you want to pause the camera/MediaPipe to save battery when going home, add that here:
+        // video.pause();
+      }
+
+      // FIXED ANCHOR: No more reticle. Just reveal the ghost letter.
+      function resetPlacement() {
+        document.querySelector('#letter-anchor').setAttribute('visible', true);
+        document.getElementById('place-hint').textContent = 'Hold phone steady and trace the letter';
+        document.getElementById('place-hint').style.display = 'block';
+        applySettings(); // Ensure zoom/opacity apply to the newly shown letter
+      }
+
+      function openModal(id) { document.getElementById(id).style.display = 'flex'; }
+      function closeModal(id) {
+        document.getElementById(id).style.display = 'none';
+        applySettings();
+      }
+
+      function updateZoomPreview(val) { currentZoom = parseFloat(val); }
+      function setZoom(val) {
+        currentZoom = val;
+        document.getElementById('zoom-slider').value = val;
+      }
+
+      function updateOpacityPreview(val) { currentOpacity = parseFloat(val); }
+      function setOpacity(val) {
+        currentOpacity = val;
+        document.getElementById('opacity-slider').value = val;
+      }
+
+      // --- MEDIAPIPE & CANVAS INIT ---
+      // (Drop your existing Phase 1 MediaPipe code here)
+      document.addEventListener('DOMContentLoaded', () => {
+        const video = document.getElementById('cam-video');
+        const canvas = document.getElementById('tracking-canvas');
+        const ctx = canvas.getContext('2d');
+
+        // Setup MediaPipe Hands here...
+        // const hands = new Hands({...});
+        // const camera = new Camera(video, {...});
+
+        // Replace the old ar-hit-test logic with your drawing loop
+        function onResults(results) {
+           // 1. Draw dot/trail on #tracking-canvas
+           // 2. Check against targetPath
+           // 3. Update feedback logic
+        }
+      });
+
+      // --- Enable mouse-drag scrolling on desktop for the letter scroller
+      // (touch devices already scroll natively via overflow-x + touch-action)
+      (function enableDragScroll() {
+        const scroller = document.getElementById('letter-scroller');
+        let isDown = false, startX, scrollLeft;
+
+        scroller.addEventListener('mousedown', (e) => {
+          isDown = true;
+          startX = e.pageX - scroller.offsetLeft;
+          scrollLeft = scroller.scrollLeft;
+        });
+        window.addEventListener('mouseup', () => { isDown = false; });
+        window.addEventListener('mousemove', (e) => {
+          if (!isDown) return;
+          e.preventDefault();
+          const x = e.pageX - scroller.offsetLeft;
+          const walk = (x - startX) * 1.2;
+          scroller.scrollLeft = scrollLeft - walk;
+        });
+      })();
+    </script>
+
+  </body>
+</html>
