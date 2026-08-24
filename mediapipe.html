@@ -177,7 +177,7 @@
       loading-screen="enabled: false">
 
       <a-assets timeout="2000">
-        <img id="baa-img" src="Baa.svg">
+        <img id="be-img" src="Be.svg">
         <!-- Add other letter assets here as they are created -->
       </a-assets>
 
@@ -188,7 +188,7 @@
         <a-entity id="letter-anchor" visible="false">
           <a-image
             id="urdu-letter"
-            src="Baa.svg"
+            src="Be.svg"
             position="0 0 -1"
             scale="0.3 0.3 0.3"
             rotation="0 0 0"
@@ -211,7 +211,7 @@
       </div>
       <div class="letter-grid">
         <div class="letter-box" onclick="selectLetter('Alif.svg', 'ا')">ا</div>
-        <div class="letter-box" onclick="selectLetter('Baa.svg', 'ب')">ب</div>
+        <div class="letter-box" onclick="selectLetter('Be.svg', 'ب')">ب</div>
         <div class="letter-box" onclick="selectLetter('Peh.svg', 'پ')">پ</div>
         <div class="letter-box" onclick="selectLetter('Taa.svg', 'ت')">ت</div>
         <div class="letter-box" onclick="selectLetter('Tay.svg', 'ٹ')">ٹ</div>
@@ -261,7 +261,7 @@
         <button class="chevron" onclick="scrollNav(-150)">&#10094;</button>
         <div class="letter-scroller" id="letter-scroller">
           <div class="nav-letter active" onclick="changeLetterNav('Alif.svg', this)">ا</div>
-          <div class="nav-letter" onclick="changeLetterNav('Baa.svg', this)">ب</div>
+          <div class="nav-letter" onclick="changeLetterNav('Be.svg', this)">ب</div>
           <div class="nav-letter" onclick="changeLetterNav('Peh.svg', this)">پ</div>
           <div class="nav-letter" onclick="changeLetterNav('Taa.svg', this)">ت</div>
           <div class="nav-letter" onclick="changeLetterNav('Tay.svg', this)">ٹ</div>
@@ -382,12 +382,18 @@
           { x: 0.5, y: 0.5 }, // Middle
           { x: 0.5, y: 0.8 }  // Bottom center
         ],
-        'Baa.svg': [
+        'Be.svg': [
           { x: 0.3, y: 0.8 }, // Start bottom left (curve)
           { x: 0.3, y: 0.4 }, // Up
           { x: 0.5, y: 0.2 }, // Curve right over top
           { x: 0.7, y: 0.4 }, // Down right
           { x: 0.7, y: 0.8 }  // Bottom right
+        ],
+        'Jeem.svg': [
+          { x: 0.65, y: 0.2 }, // Start top right
+          { x: 0.45, y: 0.35 }, // Curve down to the left
+          { x: 0.45, y: 0.6 },  // Bottom of the hook
+          { x: 0.7, y: 0.7 }    // Base line extending to the right
         ],
         // Add others as assets are created
       };
