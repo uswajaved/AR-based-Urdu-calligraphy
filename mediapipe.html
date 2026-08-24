@@ -571,38 +571,61 @@
 
           if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
             const landmarks = results.multiHandLandmarks[0];
-            const indexTip = landmarks[8]; // Landmark 8 is the index fingertip
+            
+            // --- NEW: VIRTUAL PEN/NIB TRACKING LOGIC ---
+            // Landmark 5 is the knuckle at the base of the index finger
+            // Landmark 8 is the tip of the index finger
+            const indexMcp = landmarks[5]; 
+            const indexTip = landmarks[8]; 
 
-            // MediaPipe returns normalized coords (0.0 to 1.0)
-            const x = indexTip.x * canvasEl.width;
-            const y = indexTip.y * canvasEl.height;
+            // Calculate the direction vector from knuckle to fingertip
+            const dirX = indexTip.x - indexMcp.x;
+            const dirY = indexTip.y - indexMcp.y;
+
+            // Extend the point outward to simulate a pen nib.
+            const PEN_LENGTH_FACTOR = 0.8; 
+            
+            const penTipX = indexTip.x + (dirX * PEN_LENGTH_FACTOR);
+            const penTipY = indexTip.y + (dirY * PEN_LENGTH_FACTOR);
+
+            // --- DRAWING THE PEN NIB ---
+            // Map normalized coords to canvas pixels
+            const x = penTipX * canvasEl.width;
+            const y = penTipY * canvasEl.height;
+
+            // Optional: Draw a line from the finger to the pen tip to show the "pen"
+            ctx.beginPath();
+            ctx.moveTo(indexTip.x * canvasEl.width, indexTip.y * canvasEl.height);
+            ctx.lineTo(x, y);
+            ctx.lineWidth = 6;
+            ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)'; // Black pen body
+            ctx.stroke();
 
             // --- PROXIMITY CHECK ---
             let isOnPath = false;
             if (currentTargetPath.length > 0) {
               // Because the canvas is visually mirrored via CSS scaleX(-1), 
-              // we must invert the X coordinate from MediaPipe to properly 
-              // compare it against our normalized target path coordinates.
-              const mirroredX = 1.0 - indexTip.x; 
+              // we must invert the X coordinate to compare it against the target path
+              const mirroredX = 1.0 - penTipX; 
               
               let minDist = Infinity;
               for (let p of currentTargetPath) {
-                const dist = Math.hypot(mirroredX - p.x, indexTip.y - p.y);
+                const dist = Math.hypot(mirroredX - p.x, penTipY - p.y);
                 if (dist < minDist) minDist = dist;
               }
 
-              // If fingertip is within 10% of screen width to the path, it's "on target"
+              // If pen nib is within 10% of screen width to the path, it's "on target"
               if (minDist < 0.1) {
                 isOnPath = true;
               }
             }
 
-            // Draw the fingertip dot
+            // Draw the pen nib dot
             ctx.beginPath();
-            ctx.arc(x, y, 20, 0, 2 * Math.PI);
-            ctx.fillStyle = isOnPath ? 'rgba(0, 255, 0, 0.8)' : 'rgba(255, 0, 0, 0.8)'; // Green if on path, Red if off
+            ctx.arc(x, y, 12, 0, 2 * Math.PI); // slightly smaller dot to look like a nib
+            ctx.fillStyle = isOnPath ? 'rgba(0, 255, 0, 0.9)' : 'rgba(255, 0, 0, 0.9)'; // Green if on path, Red if off
             ctx.fill();
-            ctx.lineWidth = 4;
+            ctx.lineWidth = 3;
             ctx.strokeStyle = '#fff';
             ctx.stroke();
           }
