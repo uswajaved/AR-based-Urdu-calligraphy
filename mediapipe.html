@@ -6,6 +6,9 @@
          WebXR hit-test / SLAM placement has also been removed in favor of
          a MediaPipe hand-tracking camera passthrough (Phase 2). -->
     <script src="https://aframe.io/releases/1.7.0/aframe.min.js"></script>
+    <!-- MediaPipe Hands Solution -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+    
     <style>
       body { margin: 0; overflow: hidden; font-family: sans-serif; }
 
@@ -178,20 +181,22 @@
         <!-- Add other letter assets here as they are created -->
       </a-assets>
 
-           <!-- Fixed on-screen anchor. Z = -1 places it 1 meter in front of camera -->
-      <a-entity id="letter-anchor" visible="false">
-        <a-image
-          id="urdu-letter"
-          src="Baa.svg"
-          position="0 0 -1"
-          scale="0.3 0.3 0.3"
-          rotation="0 0 0"
-          side="double"
-          material="shader: flat; transparent: true; opacity: 0.5;">
-        </a-image>
+      <!-- FIXED ON-SCREEN ANCHOR: 
+           Nested inside the camera entity so it is strictly bound to screen space,
+           not world space. It will stay centered regardless of phone tilt. -->
+      <a-entity id="camera" camera look-controls="enabled: true">
+        <a-entity id="letter-anchor" visible="false">
+          <a-image
+            id="urdu-letter"
+            src="Baa.svg"
+            position="0 0 -1"
+            scale="0.3 0.3 0.3"
+            rotation="0 0 0"
+            side="double"
+            material="shader: flat; transparent: true; opacity: 0.5;">
+          </a-image>
+        </a-entity>
       </a-entity>
-
-      <a-entity id="camera" camera></a-entity>
     </a-scene>
 
     <!-- Placement guidance shown while looking for a surface / after placing -->
@@ -307,7 +312,7 @@
         <button class="nav-btn" onclick="resetPlacement()">
           <!-- Place.svg is not in the repo; inline pin icon as fallback -->
           <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="#333" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M12 21s7-4.5 7-11a7 7 0 1 0-14 0c0 6.5 7 11 7 11z"></path>
+            <path d="M12 21s7-4.5 7-11A7 7 0 1 0-14 0c0 6.5 7 11 7 11z"></path>
             <circle cx="12" cy="10" r="2.5"></circle>
           </svg>
           <span>PLACE</span>
@@ -363,6 +368,11 @@
 
       let currentTargetPath = [];
       let videoStream = null; // Keep a reference to the stream to pause/resume
+      let hands = null;
+      let isTracking = false;
+      let videoEl = null;
+      let canvasEl = null;
+      let ctx = null;
 
       // Normalized coordinates (0.0 to 1.0) mapping the ideal trace path.
       // X goes left-to-right, Y goes top-to-bottom (standard image coords).
@@ -393,8 +403,18 @@
         }
       }
 
+      // Helper to restart camera if we are returning from Home
+      async function startCameraIfNeeded() {
+        if (!videoStream) {
+          await initCamera();
+        }
+        isTracking = true;
+      }
+
       // Called from the Home Screen Grid
-      function selectLetter(filename, character) {
+      async function selectLetter(filename, character) {
+        await startCameraIfNeeded();
+
         document.querySelector('#home-screen').style.display = 'none';
         document.querySelector('#top-nav').style.display = 'flex';
         document.querySelector('#bottom-nav').style.display = 'flex';
@@ -443,6 +463,7 @@
       }
 
       function goHome() {
+        isTracking = false; // Stop processing frames
         document.querySelector('#home-screen').style.display = 'flex';
         document.querySelector('#top-nav').style.display = 'none';
         document.querySelector('#bottom-nav').style.display = 'none';
@@ -484,9 +505,9 @@
 
       // --- MEDIAPIPE & CANVAS INIT ---
       document.addEventListener('DOMContentLoaded', () => {
-        const video = document.getElementById('cam-video');
-        const canvas = document.getElementById('tracking-canvas');
-        const ctx = canvas.getContext('2d');
+        videoEl = document.getElementById('cam-video');
+        canvasEl = document.getElementById('tracking-canvas');
+        ctx = canvasEl.getContext('2d');
 
         // --- 1. INITIALIZE THE CAMERA ---
         async function initCamera() {
@@ -501,26 +522,90 @@
               audio: false
             });
             // Assign the camera stream to the <video> tag
-            video.srcObject = videoStream;
+            videoEl.srcObject = videoStream;
             console.log("Camera successfully started!");
           } catch (err) {
             console.error("Camera access denied or failed:", err);
             alert("Could not access the camera. Please allow camera permissions and reload.");
           }
         }
+        
+        // Expose initCamera globally so startCameraIfNeeded() can access it
+        window.initCamera = initCamera;
 
         // Start the camera immediately when the page loads
         initCamera();
 
-        // --- 2. MEDIAPIPE SETUP (To be added later) ---
-        // const hands = new Hands({...});
-        // const camera = new Camera(video, {...});
+        // --- 2. MEDIAPIPE SETUP ---
+        hands = new Hands({
+          locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+        });
+        hands.setOptions({
+          maxNumHands: 1,
+          modelComplexity: 1,
+          minDetectionConfidence: 0.5,
+          minTrackingConfidence: 0.5
+        });
+        hands.onResults(onResults);
 
-        // --- 3. DRAWING LOOP (To be added later) ---
+        // --- 3. DRAWING LOOP ---
+        async function processFrame() {
+          if (isTracking && videoEl.readyState >= 2) {
+            await hands.send({image: videoEl});
+          }
+          requestAnimationFrame(processFrame);
+        }
+        // Kick off the loop
+        processFrame();
+
+        // --- 4. ON RESULTS CALLBACK (Draw dot & check proximity) ---
         function onResults(results) {
-           // 1. Draw dot/trail on #tracking-canvas
-           // 2. Check against targetPath
-           // 3. Update feedback logic
+          // Match canvas internal size to video element to keep coordinates 1:1
+          if (canvasEl.width !== videoEl.videoWidth) {
+            canvasEl.width = videoEl.videoWidth;
+            canvasEl.height = videoEl.videoHeight;
+          }
+
+          // Clear previous frame drawings
+          ctx.clearRect(0, 0, canvasEl.width, canvasEl.height);
+
+          if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+            const landmarks = results.multiHandLandmarks[0];
+            const indexTip = landmarks[8]; // Landmark 8 is the index fingertip
+
+            // MediaPipe returns normalized coords (0.0 to 1.0)
+            const x = indexTip.x * canvasEl.width;
+            const y = indexTip.y * canvasEl.height;
+
+            // --- PROXIMITY CHECK ---
+            let isOnPath = false;
+            if (currentTargetPath.length > 0) {
+              // Because the canvas is visually mirrored via CSS scaleX(-1), 
+              // we must invert the X coordinate from MediaPipe to properly 
+              // compare it against our normalized target path coordinates.
+              const mirroredX = 1.0 - indexTip.x; 
+              
+              let minDist = Infinity;
+              for (let p of currentTargetPath) {
+                const dist = Math.hypot(mirroredX - p.x, indexTip.y - p.y);
+                if (dist < minDist) minDist = dist;
+              }
+
+              // If fingertip is within 10% of screen width to the path, it's "on target"
+              if (minDist < 0.1) {
+                isOnPath = true;
+              }
+            }
+
+            // Draw the fingertip dot
+            ctx.beginPath();
+            ctx.arc(x, y, 20, 0, 2 * Math.PI);
+            ctx.fillStyle = isOnPath ? 'rgba(0, 255, 0, 0.8)' : 'rgba(255, 0, 0, 0.8)'; // Green if on path, Red if off
+            ctx.fill();
+            ctx.lineWidth = 4;
+            ctx.strokeStyle = '#fff';
+            ctx.stroke();
+          }
         }
       });
 
