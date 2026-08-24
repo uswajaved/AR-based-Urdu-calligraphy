@@ -23,7 +23,7 @@
       /* A-Frame canvas sits above the tracking canvas */
       .a-canvas { z-index: 2 !important; background: transparent !important; }
 
-      /* Her existing UI layers need to sit above the A-Frame canvas */
+      /* Existing UI layers need to sit above the A-Frame canvas */
       #home-screen { z-index: 200; } /* Already set, but good to reinforce */
       #dom-overlay { z-index: 150; } /* Wraps nav and modals */
 
@@ -349,6 +349,7 @@
       const BASE_SCALE = 0.3; // meters — keep AR content small per WebXR best practice
 
       let currentTargetPath = [];
+      let videoStream = null; // Keep a reference to the stream to pause/resume
 
       // Normalized coordinates (0.0 to 1.0) mapping the ideal trace path.
       // X goes left-to-right, Y goes top-to-bottom (standard image coords).
@@ -435,9 +436,11 @@
         document.getElementById('place-hint').style.display = 'none';
         document.querySelector('#letter-anchor').setAttribute('visible', false);
 
-        // REMOVED: scene.exitVR().
-        // If you want to pause the camera/MediaPipe to save battery when going home, add that here:
-        // video.pause();
+        // Pause the camera stream to save battery when on the home screen
+        if (videoStream) {
+          videoStream.getTracks().forEach(track => track.stop());
+          videoStream = null;
+        }
       }
 
       // FIXED ANCHOR: No more reticle. Just reveal the ghost letter.
@@ -467,17 +470,40 @@
       }
 
       // --- MEDIAPIPE & CANVAS INIT ---
-      // (Drop your existing Phase 1 MediaPipe code here)
       document.addEventListener('DOMContentLoaded', () => {
         const video = document.getElementById('cam-video');
         const canvas = document.getElementById('tracking-canvas');
         const ctx = canvas.getContext('2d');
 
-        // Setup MediaPipe Hands here...
+        // --- 1. INITIALIZE THE CAMERA ---
+        async function initCamera() {
+          try {
+            // Ask the browser for the back camera
+            videoStream = await navigator.mediaDevices.getUserMedia({
+              video: { 
+                facingMode: 'environment', // 'environment' = back camera
+                width: { ideal: 1280 },
+                height: { ideal: 720 }
+              },
+              audio: false
+            });
+            // Assign the camera stream to the <video> tag
+            video.srcObject = videoStream;
+            console.log("Camera successfully started!");
+          } catch (err) {
+            console.error("Camera access denied or failed:", err);
+            alert("Could not access the camera. Please allow camera permissions and reload.");
+          }
+        }
+
+        // Start the camera immediately when the page loads
+        initCamera();
+
+        // --- 2. MEDIAPIPE SETUP (To be added later) ---
         // const hands = new Hands({...});
         // const camera = new Camera(video, {...});
 
-        // Replace the old ar-hit-test logic with your drawing loop
+        // --- 3. DRAWING LOOP (To be added later) ---
         function onResults(results) {
            // 1. Draw dot/trail on #tracking-canvas
            // 2. Check against targetPath
