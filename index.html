@@ -45,8 +45,32 @@
       })();
     </script>
     <script src="https://aframe.io/releases/1.7.0/aframe.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
     <style>
       body { margin: 0; overflow: hidden; font-family: sans-serif; }
+
+      /* --- CAMERA PASSTHROUGH & PEN-TRACKING LAYERS --- */
+      #cam-video, #tracking-canvas {
+        position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+        object-fit: cover;
+        z-index: 0;
+      }
+      #tracking-canvas {
+        z-index: 1;
+        background: transparent;
+        transform: scaleX(-1);
+      }
+
+      a-scene, .a-canvas {
+        position: fixed !important;
+        top: 0; left: 0;
+        width: 100% !important;
+        height: 100% !important;
+        z-index: 2 !important;
+        background: transparent !important;
+      }
+
+      #dom-overlay { z-index: 150; }
 
       /* A-Frame 1.7.0 xr-mode-ui="XRMode: ar" creates .a-enter-ar (not .a-enter-vr).
          Sit above home screen (z-index 200) and modals (150). */
@@ -60,7 +84,6 @@
         background-color: #007bff !important;
         border-radius: 50% !important;
       }
-      .a-canvas { z-index: 0 !important; }
 
       /* --- HOME SCREEN --- */
       #home-screen {
@@ -167,9 +190,23 @@
       .preset-btns button.active { background: #007bff; color: white; border-color: #007bff; }
       .continue-btn { background: #007bff; color: white; width: 100%; padding: 12px; border: none; border-radius: 8px; font-weight: bold; font-size: 16px; cursor: pointer; margin-top: 10px;}
       input[type=range] { width: 100%; cursor: pointer; accent-color: #007bff; }
+
+      /* Toggle with ?debug=1 in the URL */
+      #pen-debug-panel {
+        position: fixed; top: 90px; left: 8px; z-index: 250;
+        background: rgba(0, 0, 0, 0.75); color: #0f0;
+        font: 11px/1.4 monospace; padding: 8px 10px;
+        border-radius: 6px; max-width: 260px; pointer-events: none;
+        display: none; white-space: pre-wrap;
+      }
     </style>
   </head>
   <body>
+
+    <!-- Camera passthrough + pen-tracking canvas (MediaPipe) -->
+    <video id="cam-video" autoplay playsinline muted></video>
+    <canvas id="tracking-canvas"></canvas>
+    <div id="pen-debug-panel" aria-hidden="true"></div>
 
     <!-- 1. A-FRAME SCENE (WebXR hit-test, no markers) -->
     <!--
@@ -180,7 +217,7 @@
     -->
     <a-scene
       webxr="optionalFeatures: hit-test, local-floor, dom-overlay; overlayElement: #dom-overlay;"
-      renderer="colorManagement: true; physicallyCorrectLights: true;"
+      renderer="colorManagement: true; alpha: true; physicallyCorrectLights: true;"
       xr-mode-ui="XRMode: ar"
       loading-screen="enabled: false">
 
@@ -383,7 +420,176 @@
     <script>
       let currentZoom = 1;
       let currentOpacity = 0.5;
-      const BASE_SCALE = 0.3; // meters — keep AR content small per WebXR best practice
+      const BASE_SCALE = 0.3;
+      const DEBUG_PEN_TRACKING = new URLSearchParams(location.search).has('debug');
+      const PATH_HIT_THRESHOLD = 0.08;
+
+      let currentLetterFilename = 'Be.svg';
+      let currentTargetPathUV = [];
+      let currentPathIsDefault = false;
+      let projectedScreenPath = [];
+      let videoStream = null;
+      let hands = null;
+      let isPenTracking = false;
+      let videoEl = null;
+      let canvasEl = null;
+      let ctx = null;
+      let debugPanelEl = null;
+      let placeHintTimeout = null;
+      let inkTrail = [];
+      let nextWaypointIdx = 0;
+      let letterComplete = false;
+
+      // Stroke paths in letter-local UV space (0–1 on the letter image; u=left→right, v=top→bottom).
+      const letterPaths = {
+        'Alif.svg': [
+          { x: 0.5, y: 0.15 },
+          { x: 0.5, y: 0.5 },
+          { x: 0.5, y: 0.85 }
+        ],
+        'Be.svg': [
+          { x: 0.25, y: 0.85 },
+          { x: 0.25, y: 0.35 },
+          { x: 0.5, y: 0.15 },
+          { x: 0.75, y: 0.35 },
+          { x: 0.75, y: 0.85 }
+        ],
+        'Baa.svg': [
+          { x: 0.25, y: 0.85 },
+          { x: 0.25, y: 0.35 },
+          { x: 0.5, y: 0.15 },
+          { x: 0.75, y: 0.35 },
+          { x: 0.75, y: 0.85 }
+        ],
+        'Jeem.svg': [
+          { x: 0.7, y: 0.15 },
+          { x: 0.45, y: 0.35 },
+          { x: 0.45, y: 0.6 },
+          { x: 0.75, y: 0.75 }
+        ]
+      };
+
+      const DEFAULT_LETTER_PATH = [
+        { x: 0.5, y: 0.2 },
+        { x: 0.5, y: 0.8 }
+      ];
+
+      function getLetterPathUV(filename) {
+        return letterPaths[filename] || DEFAULT_LETTER_PATH;
+      }
+
+      function distToSegment(px, py, x1, y1, x2, y2) {
+        const dx = x2 - x1;
+        const dy = y2 - y1;
+        const lenSq = dx * dx + dy * dy;
+        if (lenSq === 0) return Math.hypot(px - x1, py - y1);
+        let t = ((px - x1) * dx + (py - y1) * dy) / lenSq;
+        t = Math.max(0, Math.min(1, t));
+        return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
+      }
+
+      function minDistToPath(px, py, path) {
+        if (path.length === 0) return Infinity;
+        if (path.length === 1) return Math.hypot(px - path[0].x, py - path[0].y);
+        let min = Infinity;
+        for (let i = 0; i < path.length - 1; i++) {
+          const d = distToSegment(px, py, path[i].x, path[i].y, path[i + 1].x, path[i + 1].y);
+          if (d < min) min = d;
+        }
+        return min;
+      }
+
+      function letterUVToLocal(u, v) {
+        return new THREE.Vector3(u - 0.5, 0.5 - v, 0);
+      }
+
+      function viewportNormToVideoNorm(vx, vy, viewportW, viewportH) {
+        const iw = canvasEl ? canvasEl.width : 0;
+        const ih = canvasEl ? canvasEl.height : 0;
+        if (!iw || !ih || !viewportW || !viewportH) return null;
+        const imageAspect = iw / ih;
+        const containerAspect = viewportW / viewportH;
+        let visibleW, visibleH, offsetX, offsetY;
+        if (imageAspect > containerAspect) {
+          visibleH = ih;
+          visibleW = ih * containerAspect;
+          offsetX = (iw - visibleW) / 2;
+          offsetY = 0;
+        } else {
+          visibleW = iw;
+          visibleH = iw / containerAspect;
+          offsetX = 0;
+          offsetY = (ih - visibleH) / 2;
+        }
+        const px = offsetX + vx * visibleW;
+        const py = offsetY + vy * visibleH;
+        return { x: px / iw, y: py / ih };
+      }
+
+      function projectLetterPathToVideoNorm(pathUV) {
+        const anchorEl = document.querySelector('#letter-anchor');
+        const letterEl = document.querySelector('#urdu-letter');
+        const cameraEl = document.querySelector('[camera]');
+        const sceneEl = document.querySelector('a-scene');
+        if (!anchorEl || anchorEl.getAttribute('visible') !== 'true' || !letterEl || !cameraEl || !sceneEl || !sceneEl.renderer) {
+          return [];
+        }
+        const threeCam = cameraEl.getObject3D('camera');
+        const letterObj = letterEl.object3D;
+        const afCanvas = sceneEl.renderer.domElement;
+        const cw = afCanvas.clientWidth;
+        const ch = afCanvas.clientHeight;
+        if (!cw || !ch || !pathUV.length) return [];
+
+        letterObj.updateWorldMatrix(true, false);
+        const projected = [];
+        for (let i = 0; i < pathUV.length; i++) {
+          const uv = pathUV[i];
+          const world = letterUVToLocal(uv.x, uv.y).applyMatrix4(letterObj.matrixWorld);
+          const ndc = world.clone().project(threeCam);
+          if (ndc.z < -1 || ndc.z > 1) continue;
+          const viewport = {
+            x: (ndc.x + 1) / 2,
+            y: (-ndc.y + 1) / 2
+          };
+          const videoNorm = viewportNormToVideoNorm(viewport.x, viewport.y, cw, ch);
+          if (videoNorm) projected.push(videoNorm);
+        }
+        return projected;
+      }
+
+      function resetTraceProgress(filename) {
+        currentLetterFilename = filename;
+        currentTargetPathUV = getLetterPathUV(filename);
+        currentPathIsDefault = !letterPaths[filename];
+        projectedScreenPath = [];
+        inkTrail = [];
+        nextWaypointIdx = 0;
+        letterComplete = false;
+      }
+
+      function traceHintText() {
+        if (currentPathIsDefault) {
+          return 'Trace the letter (default guide — path not defined yet for this letter)';
+        }
+        return 'Hold phone steady and trace the letter';
+      }
+
+      function updateDebugPanel(state) {
+        if (!DEBUG_PEN_TRACKING || !debugPanelEl) return;
+        debugPanelEl.style.display = 'block';
+        debugPanelEl.textContent =
+          'debug=1\n' +
+          'penTracking: ' + (isPenTracking ? 'on' : 'off') + '\n' +
+          'hand: ' + (state.handDetected ? 'yes' : 'no') + '\n' +
+          'pen: ' + (state.penX != null ? state.penX.toFixed(3) + ', ' + state.penY.toFixed(3) : 'n/a') + '\n' +
+          'onPath: ' + (state.isOnPath ? 'yes' : 'no') + '\n' +
+          'dist: ' + (state.minDist != null ? state.minDist.toFixed(3) : 'n/a') + '\n' +
+          'waypoint: ' + state.nextWaypoint + '/' + state.pathLength + '\n' +
+          'projectedPts: ' + state.projectedPts + '\n' +
+          'zoom: ' + currentZoom.toFixed(1) + '\n' +
+          'defaultPath: ' + (currentPathIsDefault ? 'yes' : 'no');
+      }
 
       function applySettings() {
         let letterEl = document.querySelector('#urdu-letter');
@@ -394,8 +600,175 @@
         }
       }
 
+      async function initCamera() {
+        if (!videoEl) return;
+        try {
+          videoStream = await navigator.mediaDevices.getUserMedia({
+            video: {
+              facingMode: 'environment',
+              width: { ideal: 1280 },
+              height: { ideal: 720 }
+            },
+            audio: false
+          });
+          videoEl.srcObject = videoStream;
+          await videoEl.play();
+        } catch (err) {
+          console.error('Camera access denied or failed:', err);
+          alert('Could not access the camera. Please allow camera permissions and reload.');
+        }
+      }
+
+      async function startCameraIfNeeded() {
+        if (!videoStream) {
+          await initCamera();
+        }
+      }
+
+      function stopCamera() {
+        if (videoStream) {
+          videoStream.getTracks().forEach(function (track) { track.stop(); });
+          videoStream = null;
+        }
+      }
+
+      function drawProjectedPath(path, strokeStyle) {
+        if (!path.length) return;
+        ctx.beginPath();
+        ctx.moveTo(path[0].x * canvasEl.width, path[0].y * canvasEl.height);
+        for (let i = 1; i < path.length; i++) {
+          ctx.lineTo(path[i].x * canvasEl.width, path[i].y * canvasEl.height);
+        }
+        ctx.lineWidth = 8;
+        ctx.strokeStyle = strokeStyle;
+        ctx.stroke();
+        if (DEBUG_PEN_TRACKING) {
+          path.forEach(function (p, idx) {
+            ctx.beginPath();
+            ctx.arc(p.x * canvasEl.width, p.y * canvasEl.height, 6, 0, 2 * Math.PI);
+            ctx.fillStyle = idx === nextWaypointIdx ? '#ff0' : 'rgba(255,255,255,0.6)';
+            ctx.fill();
+          });
+        }
+      }
+
+      function onHandResults(results) {
+        if (videoEl.videoWidth > 0 && canvasEl.width !== videoEl.videoWidth) {
+          canvasEl.width = videoEl.videoWidth;
+          canvasEl.height = videoEl.videoHeight;
+        }
+
+        ctx.clearRect(0, 0, canvasEl.width, canvasEl.height);
+
+        if (isPenTracking) {
+          projectedScreenPath = projectLetterPathToVideoNorm(currentTargetPathUV);
+        } else {
+          projectedScreenPath = [];
+        }
+
+        const activePath = projectedScreenPath;
+        const hitThreshold = PATH_HIT_THRESHOLD;
+        const debugState = {
+          handDetected: false,
+          penX: null,
+          penY: null,
+          isOnPath: false,
+          minDist: null,
+          nextWaypoint: nextWaypointIdx,
+          pathLength: activePath.length,
+          projectedPts: activePath.length
+        };
+
+        if (activePath.length > 0) {
+          drawProjectedPath(
+            activePath,
+            currentPathIsDefault ? 'rgba(255, 165, 0, 0.35)' : 'rgba(0, 123, 255, 0.3)'
+          );
+        }
+
+        if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0 && isPenTracking) {
+          debugState.handDetected = true;
+          const landmarks = results.multiHandLandmarks[0];
+          const indexMcp = landmarks[5];
+          const indexTip = landmarks[8];
+          const dirX = indexTip.x - indexMcp.x;
+          const dirY = indexTip.y - indexMcp.y;
+          const PEN_LENGTH_FACTOR = 0.8;
+          const penTipX = indexTip.x + (dirX * PEN_LENGTH_FACTOR);
+          const penTipY = indexTip.y + (dirY * PEN_LENGTH_FACTOR);
+
+          debugState.penX = penTipX;
+          debugState.penY = penTipY;
+
+          const x = penTipX * canvasEl.width;
+          const y = penTipY * canvasEl.height;
+
+          ctx.beginPath();
+          ctx.moveTo(indexTip.x * canvasEl.width, indexTip.y * canvasEl.height);
+          ctx.lineTo(x, y);
+          ctx.lineWidth = 6;
+          ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)';
+          ctx.stroke();
+
+          let isOnPath = false;
+          if (activePath.length > 0 && !letterComplete) {
+            const minDist = minDistToPath(penTipX, penTipY, activePath);
+            debugState.minDist = minDist;
+            if (minDist < hitThreshold) {
+              isOnPath = true;
+              inkTrail.push({ x: penTipX, y: penTipY });
+              if (nextWaypointIdx < activePath.length) {
+                const wp = activePath[nextWaypointIdx];
+                const wpDist = Math.hypot(penTipX - wp.x, penTipY - wp.y);
+                if (wpDist < hitThreshold) {
+                  nextWaypointIdx++;
+                  debugState.nextWaypoint = nextWaypointIdx;
+                }
+              }
+            }
+          }
+          debugState.isOnPath = isOnPath;
+
+          if (inkTrail.length > 1) {
+            ctx.beginPath();
+            ctx.moveTo(inkTrail[0].x * canvasEl.width, inkTrail[0].y * canvasEl.height);
+            for (let i = 1; i < inkTrail.length; i++) {
+              ctx.lineTo(inkTrail[i].x * canvasEl.width, inkTrail[i].y * canvasEl.height);
+            }
+            ctx.lineWidth = 10;
+            ctx.strokeStyle = 'rgba(0, 0, 0, 0.9)';
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            ctx.stroke();
+          }
+
+          ctx.beginPath();
+          ctx.arc(x, y, 12, 0, 2 * Math.PI);
+          ctx.fillStyle = isOnPath ? 'rgba(0, 255, 0, 0.9)' : 'rgba(255, 0, 0, 0.9)';
+          ctx.fill();
+          ctx.lineWidth = 3;
+          ctx.strokeStyle = '#fff';
+          ctx.stroke();
+
+          if (!letterComplete && activePath.length > 0 && nextWaypointIdx >= activePath.length) {
+            letterComplete = true;
+            document.getElementById('place-hint').textContent = '✅ Letter Complete! Tap PLACE to reposition or pick another letter.';
+            document.getElementById('place-hint').style.display = 'block';
+            if (placeHintTimeout) clearTimeout(placeHintTimeout);
+          }
+        } else if (isPenTracking && !letterComplete) {
+          document.getElementById('place-hint').textContent = 'Show your hand holding the pen to the camera';
+          document.getElementById('place-hint').style.display = 'block';
+        }
+
+        updateDebugPanel(debugState);
+      }
+
       // Called from the Home Screen Grid
-      function selectLetter(filename, character) {
+      async function selectLetter(filename, character) {
+        await startCameraIfNeeded();
+        resetTraceProgress(filename);
+
         document.querySelector('#home-screen').style.display = 'none';
         document.querySelector('#top-nav').style.display = 'flex';
         document.querySelector('#bottom-nav').style.display = 'flex';
@@ -405,7 +778,6 @@
           letterEl.setAttribute('src', filename);
         }
 
-        // Update the active state in the top scroller
         let navLetters = document.querySelectorAll('.nav-letter');
         navLetters.forEach(el => {
           el.classList.remove('active');
@@ -420,8 +792,6 @@
         var scene = document.querySelector('a-scene');
         if (!scene) return;
 
-        // Failsafe: if the scene still thinks it isn't loaded, force it NOW
-        // so enterAR() doesn't throw, keeping us in the click stack (user gesture).
         if (!scene.hasLoaded) {
           if (typeof scene.play === 'function') {
             try { scene.play(); } catch (e) { /* already playing */ }
@@ -443,7 +813,10 @@
       }
 
       // Called from the Top Nav Scroller
-      function changeLetterNav(filename, element) {
+      async function changeLetterNav(filename, element) {
+        await startCameraIfNeeded();
+        resetTraceProgress(filename);
+
         let letterEl = document.querySelector('#urdu-letter');
         if (letterEl) {
           letterEl.setAttribute('src', filename);
@@ -452,29 +825,40 @@
         document.querySelectorAll('.nav-letter').forEach(el => el.classList.remove('active'));
         element.classList.add('active');
         element.scrollIntoView({behavior: "smooth", inline: "center", block: "nearest"});
+
+        if (document.querySelector('#letter-anchor').getAttribute('visible') === 'true') {
+          document.getElementById('place-hint').textContent = traceHintText();
+          document.getElementById('place-hint').style.display = 'block';
+        }
       }
 
-      // Chevron scroll buttons
       function scrollNav(amount) {
         document.getElementById('letter-scroller').scrollBy({left: amount, behavior: 'smooth'});
       }
 
       function goHome() {
+        isPenTracking = false;
         document.querySelector('#home-screen').style.display = 'flex';
         document.querySelector('#top-nav').style.display = 'none';
         document.querySelector('#bottom-nav').style.display = 'none';
         document.getElementById('place-hint').style.display = 'none';
         document.querySelector('#letter-anchor').setAttribute('visible', false);
         document.querySelector('#reticle').setAttribute('visible', false);
+        if (placeHintTimeout) clearTimeout(placeHintTimeout);
+        stopCamera();
         const scene = document.querySelector('a-scene');
         if (scene && (scene.is('vr-mode') || scene.is('ar-mode'))) {
           scene.exitVR();
         }
       }
 
-      // SLAM placement: re-show the reticle so the user can tap a new spot
       function resetPlacement() {
+        isPenTracking = false;
+        inkTrail = [];
+        nextWaypointIdx = 0;
+        letterComplete = false;
         document.querySelector('#letter-anchor').setAttribute('visible', false);
+        document.querySelector('#reticle').setAttribute('visible', false);
         document.getElementById('place-hint').textContent = 'Move your phone to find a surface, then tap to place';
         document.getElementById('place-hint').style.display = 'block';
       }
@@ -485,23 +869,48 @@
         applySettings();
       }
 
-      function updateZoomPreview(val) { currentZoom = parseFloat(val); }
+      function updateZoomPreview(val) { currentZoom = parseFloat(val); applySettings(); }
       function setZoom(val) {
         currentZoom = val;
         document.getElementById('zoom-slider').value = val;
+        applySettings();
       }
 
-      function updateOpacityPreview(val) { currentOpacity = parseFloat(val); }
+      function updateOpacityPreview(val) { currentOpacity = parseFloat(val); applySettings(); }
       function setOpacity(val) {
         currentOpacity = val;
         document.getElementById('opacity-slider').value = val;
+        applySettings();
       }
 
-      // --- WebXR hit-test wiring ---
-      // The `ar-hit-test` component (built into A-Frame core) moves #reticle
-      // to track any real-world surface it finds, and fires 'ar-hit-test-start'
-      // once tracking begins. We use that to reveal the reticle + hint text.
       document.addEventListener('DOMContentLoaded', () => {
+        videoEl = document.getElementById('cam-video');
+        canvasEl = document.getElementById('tracking-canvas');
+        ctx = canvasEl.getContext('2d');
+        debugPanelEl = document.getElementById('pen-debug-panel');
+
+        hands = new Hands({
+          locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+        });
+        hands.setOptions({
+          maxNumHands: 1,
+          modelComplexity: 1,
+          minDetectionConfidence: 0.5,
+          minTrackingConfidence: 0.5
+        });
+        hands.onResults(onHandResults);
+
+        async function processFrame() {
+          if (isPenTracking && videoEl && videoEl.readyState >= 2) {
+            await hands.send({ image: videoEl });
+          } else {
+            requestAnimationFrame(processFrame);
+            return;
+          }
+          requestAnimationFrame(processFrame);
+        }
+        processFrame();
+
         const reticle = document.querySelector('#reticle');
         const anchor = document.querySelector('#letter-anchor');
         const hint = document.getElementById('place-hint');
@@ -510,19 +919,23 @@
           reticle.setAttribute('visible', true);
         });
 
-        // Fired when the user taps the screen while a hit-test result is live.
-        // `target` (#letter-anchor) is automatically moved to that world position
-        // by the component — we just need to reveal it and hide the reticle.
         reticle.addEventListener('ar-hit-test-select', () => {
           anchor.setAttribute('visible', true);
           reticle.setAttribute('visible', false);
-          hint.style.display = 'none';
+          isPenTracking = true;
+          inkTrail = [];
+          nextWaypointIdx = 0;
+          letterComplete = false;
+          hint.textContent = traceHintText();
+          hint.style.display = 'block';
           applySettings();
+          if (placeHintTimeout) clearTimeout(placeHintTimeout);
+          placeHintTimeout = setTimeout(function () {
+            if (!letterComplete) hint.style.display = 'none';
+          }, 15000);
         });
       });
 
-      // --- Enable mouse-drag scrolling on desktop for the letter scroller
-      // (touch devices already scroll natively via overflow-x + touch-action)
       (function enableDragScroll() {
         const scroller = document.getElementById('letter-scroller');
         let isDown = false, startX, scrollLeft;
