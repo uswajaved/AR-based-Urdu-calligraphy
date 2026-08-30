@@ -238,6 +238,9 @@
         <!-- Only files that exist in this folder. Alif.svg / Place.svg are NOT
              in the repo and must not block scene.hasLoaded. Baa.svg is. -->
         <img id="baa-img" src="Baa.svg">
+        <!-- 1×1 transparent PNG: second textured mesh so Chrome camera-access
+             does not replace the only visible letter texture with the camera feed. -->
+        <img id="cam-access-dummy-tex" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=">
       </a-assets>
 
       <!-- The placed letter. Hidden until the user taps to anchor it in place. -->
@@ -252,6 +255,16 @@
           material="shader: flat; transparent: true; opacity: 0.5;">
         </a-image>
       </a-entity>
+
+      <!-- Always present second texture (tiny, off to the side). Visible only in AR. -->
+      <a-image
+        id="cam-access-dummy"
+        src="#cam-access-dummy-tex"
+        position="0 -100 0"
+        scale="0.001 0.001 0.001"
+        visible="false"
+        material="shader: flat; transparent: true; opacity: 0.01;">
+      </a-image>
 
       <a-entity id="camera" camera></a-entity>
     </a-scene>
@@ -442,8 +455,13 @@
       let smoothedPenY = null;
       let pendingHandImage = null;
       let lastHandFeedSource = 'none';
+      // XR camera capture: throttle success path; disable after first hard failure.
+      const XR_CAPTURE_MIN_INTERVAL_MS = 200;
       let lastGetCameraImageStatus = 'n/a';
-      let lastGetCameraImagePanelAt = 0;
+      let getCameraImageLoggedOnce = false;
+      let xrCameraFeedDisabled = false;
+      let xrCameraFeedDisableReason = '';
+      let lastXrCaptureAt = 0;
       let trackingImageW = 0;
       let trackingImageH = 0;
       let videoStream = null;
@@ -459,6 +477,54 @@
       let nextWaypointIdx = 0;
       let letterComplete = false;
 
+      function logDebugOnce(key, message) {
+        if (!window.__arDebugOnce) window.__arDebugOnce = {};
+        if (window.__arDebugOnce[key]) return;
+        window.__arDebugOnce[key] = true;
+        console.log('[AR]', message);
+        if (DEBUG_PEN_TRACKING && debugPanelEl) {
+          debugPanelEl.style.display = 'block';
+          debugPanelEl.textContent =
+            (debugPanelEl.textContent ? debugPanelEl.textContent + '\n' : 'debug=1\n') + message;
+        }
+      }
+
+      function setLetterAnchorVisible(visible) {
+        const anchor = document.querySelector('#letter-anchor');
+        if (!anchor) return;
+        const next = !!visible;
+        const prev = isAFrameVisible(anchor);
+        anchor.setAttribute('visible', next);
+        if (prev !== next) {
+          logDebugOnce(
+            'letter-visible-' + next,
+            'letter-anchor visible → ' + next
+          );
+        }
+      }
+
+      function bindLetterTextureLoadLogging(letterEl) {
+        if (!letterEl || letterEl.__textureLogBound) return;
+        letterEl.__textureLogBound = true;
+        letterEl.addEventListener('materialtextureloaded', function () {
+          logDebugOnce('letter-tex-ok-' + (letterEl.getAttribute('src') || ''), 'letter texture loaded: ' + letterEl.getAttribute('src'));
+        });
+        letterEl.addEventListener('error', function (evt) {
+          logDebugOnce(
+            'letter-tex-fail-' + (letterEl.getAttribute('src') || ''),
+            'letter texture FAILED: ' + letterEl.getAttribute('src') + ' ' + (evt && evt.detail ? JSON.stringify(evt.detail) : '')
+          );
+        });
+      }
+
+      function disableXrCameraFeed(reason) {
+        if (xrCameraFeedDisabled) return;
+        xrCameraFeedDisabled = true;
+        xrCameraFeedDisableReason = reason || 'unknown';
+        lastGetCameraImageStatus = xrCameraFeedDisableReason;
+        logDebugOnce('getCameraImage-final', 'getCameraImage: ' + xrCameraFeedDisableReason + ' (capture disabled)');
+      }
+
       function clearPenFeedWatch() {
         if (penFeedWatchTimeout) {
           clearTimeout(penFeedWatchTimeout);
@@ -471,7 +537,7 @@
         lastHandFeedSource = 'none';
         penFeedWatchTimeout = setTimeout(function () {
           penFeedWatchTimeout = null;
-          if (!isPenTracking || lastHandFeedSource !== 'none') return;
+          if (!isPenTracking || lastHandFeedSource !== 'none' || xrCameraFeedDisabled) return;
           isPenTracking = false;
           setPenOverlayActive(false);
           const hint = document.getElementById('place-hint');
@@ -479,12 +545,14 @@
             hint.textContent = 'Pen tracing unavailable on this device';
             hint.style.display = 'block';
           }
+          disableXrCameraFeed(lastGetCameraImageStatus || 'timeout (feed never started)');
           if (DEBUG_PEN_TRACKING && debugPanelEl) {
             debugPanelEl.style.display = 'block';
             debugPanelEl.textContent =
               'debug=1\n' +
               'penTracking: off\n' +
               'feed: none\n' +
+              'getCameraImage: ' + lastGetCameraImageStatus + '\n' +
               'camera-access: unsupported or blocked';
           }
         }, PEN_FEED_TIMEOUT_MS);
@@ -571,7 +639,13 @@
         let boundSession = null;
 
         function capture(scene) {
+          if (xrCameraFeedDisabled) return null;
           if (!scene || !scene.renderer || !scene.frame || !window.XRWebGLBinding) return null;
+
+          const now = performance.now();
+          if (now - lastXrCaptureAt < XR_CAPTURE_MIN_INTERVAL_MS) return null;
+          lastXrCaptureAt = now;
+
           const renderer = scene.renderer;
           const session = renderer.xr.getSession();
           const frame = scene.frame;
@@ -597,12 +671,24 @@
               break;
             }
           }
-          if (!cameraView) return null;
+          if (!cameraView) {
+            // Feature may not be granted, or not ready this frame — do not spin forever,
+            // but allow a short grace period (pen-feed watchdog covers the UX message).
+            lastGetCameraImageStatus = 'no view.camera';
+            if (!getCameraImageLoggedOnce) {
+              getCameraImageLoggedOnce = true;
+              logDebugOnce('getCameraImage-first', 'getCameraImage: no view.camera yet');
+            }
+            return null;
+          }
 
           const cam = cameraView.camera;
           const w = cam.width;
           const h = cam.height;
-          if (!w || !h) return null;
+          if (!w || !h) {
+            lastGetCameraImageStatus = 'camera size 0';
+            return null;
+          }
 
           let texture = null;
           try {
@@ -610,19 +696,26 @@
             lastGetCameraImageStatus = texture == null
               ? String(texture)
               : ((texture.constructor && texture.constructor.name) || typeof texture);
+            if (!getCameraImageLoggedOnce) {
+              getCameraImageLoggedOnce = true;
+              logDebugOnce('getCameraImage-first', 'getCameraImage: ' + lastGetCameraImageStatus);
+            }
           } catch (e) {
             lastGetCameraImageStatus = 'threw: ' + (e && e.message ? e.message : String(e));
-            if (DEBUG_PEN_TRACKING) refreshGetCameraImageDebugPanel(true);
+            disableXrCameraFeed(lastGetCameraImageStatus);
             return null;
           }
-          if (DEBUG_PEN_TRACKING) refreshGetCameraImageDebugPanel(false);
-          if (!texture) return null;
+          if (!texture) {
+            disableXrCameraFeed('null');
+            return null;
+          }
 
           if (!readbackFb) readbackFb = gl.createFramebuffer();
           gl.bindFramebuffer(gl.FRAMEBUFFER, readbackFb);
           gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
           if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
             gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+            disableXrCameraFeed('framebuffer incomplete');
             return null;
           }
 
@@ -660,6 +753,20 @@
             return trackingImageW && trackingImageH
               ? { w: trackingImageW, h: trackingImageH }
               : null;
+          },
+          resetSessionState: function () {
+            binding = null;
+            readbackFb = null;
+            boundSession = null;
+            xrCameraFeedDisabled = false;
+            xrCameraFeedDisableReason = '';
+            getCameraImageLoggedOnce = false;
+            lastGetCameraImageStatus = 'n/a';
+            lastXrCaptureAt = 0;
+            if (window.__arDebugOnce) {
+              delete window.__arDebugOnce['getCameraImage-first'];
+              delete window.__arDebugOnce['getCameraImage-final'];
+            }
           }
         };
       })();
@@ -804,20 +911,6 @@
         return 'Hold phone steady and trace the letter';
       }
 
-      function refreshGetCameraImageDebugPanel(force) {
-        if (!DEBUG_PEN_TRACKING || !debugPanelEl) return;
-        const now = performance.now();
-        if (!force && now - lastGetCameraImagePanelAt < 250) return;
-        lastGetCameraImagePanelAt = now;
-        debugPanelEl.style.display = 'block';
-        const lines = (debugPanelEl.textContent || 'debug=1').split('\n').filter(function (line) {
-          return line && line.indexOf('getCameraImage:') !== 0;
-        });
-        if (!lines.length || lines[0] !== 'debug=1') lines.unshift('debug=1');
-        lines.push('getCameraImage: ' + lastGetCameraImageStatus);
-        debugPanelEl.textContent = lines.join('\n');
-      }
-
       function updateDebugPanel(state) {
         if (!DEBUG_PEN_TRACKING || !debugPanelEl) return;
         debugPanelEl.style.display = 'block';
@@ -826,6 +919,7 @@
           'penTracking: ' + (isPenTracking ? 'on' : 'off') + '\n' +
           'feed: ' + (state.feedSource || 'none') + '\n' +
           'getCameraImage: ' + lastGetCameraImageStatus + '\n' +
+          'xrFeedDisabled: ' + (xrCameraFeedDisabled ? 'yes' : 'no') + '\n' +
           'hand: ' + (state.handDetected ? 'yes' : 'no') + '\n' +
           'pen: ' + (state.penX != null ? state.penX.toFixed(3) + ', ' + state.penY.toFixed(3) : 'n/a') + '\n' +
           'onPath: ' + (state.isOnPath ? 'yes' : 'no') + '\n' +
@@ -1023,6 +1117,7 @@
 
         let letterEl = document.querySelector('#urdu-letter');
         if (letterEl) {
+          bindLetterTextureLoadLogging(letterEl);
           letterEl.setAttribute('src', filename);
         }
 
@@ -1066,6 +1161,7 @@
 
         let letterEl = document.querySelector('#urdu-letter');
         if (letterEl) {
+          bindLetterTextureLoadLogging(letterEl);
           letterEl.setAttribute('src', filename);
         }
 
@@ -1093,7 +1189,7 @@
         document.querySelector('#top-nav').style.display = 'none';
         document.querySelector('#bottom-nav').style.display = 'none';
         document.getElementById('place-hint').style.display = 'none';
-        document.querySelector('#letter-anchor').setAttribute('visible', false);
+        setLetterAnchorVisible(false);
         if (placeHintTimeout) clearTimeout(placeHintTimeout);
         stopCamera();
         const scene = document.querySelector('a-scene');
@@ -1123,7 +1219,7 @@
         pendingHandImage = null;
         resetSmoothingState();
         setPenOverlayActive(false);
-        document.querySelector('#letter-anchor').setAttribute('visible', false);
+        setLetterAnchorVisible(false);
         resetHitTestPlacement();
         document.getElementById('place-hint').textContent = 'Move your phone to find a surface, then tap to place';
         document.getElementById('place-hint').style.display = 'block';
@@ -1178,21 +1274,30 @@
           scene.addEventListener('enter-vr', function () {
             stopCamera();
             if (videoEl) videoEl.style.display = 'none';
-            if (isPenTracking) setPenOverlayActive(true);
+            const dummy = document.querySelector('#cam-access-dummy');
+            if (dummy) dummy.setAttribute('visible', true);
+            // Do not start pen capture here — wait until letter is placed.
           });
           scene.addEventListener('exit-vr', function () {
             setPassthroughLayersVisible(true);
             setPenOverlayActive(false);
             pendingHandImage = null;
             lastHandFeedSource = 'none';
+            const dummy = document.querySelector('#cam-access-dummy');
+            if (dummy) dummy.setAttribute('visible', false);
+            xrCameraFeed.resetSessionState();
           });
 
           window.__penFeedTick = function (sceneEl) {
-            if (!isPenTracking || !sceneEl.is('ar-mode')) return;
-            pendingHandImage = xrCameraFeed.capture(sceneEl);
+            if (!isPenTracking || !sceneEl.is('ar-mode') || xrCameraFeedDisabled) return;
+            try {
+              pendingHandImage = xrCameraFeed.capture(sceneEl);
+            } catch (e) {
+              disableXrCameraFeed('threw: ' + (e && e.message ? e.message : String(e)));
+              pendingHandImage = null;
+            }
           };
 
-          const anchor = document.querySelector('#letter-anchor');
           const hint = document.getElementById('place-hint');
 
           scene.addEventListener('ar-hit-test-start', () => {
@@ -1206,19 +1311,25 @@
           });
 
           scene.addEventListener('ar-hit-test-select', () => {
-            anchor.setAttribute('visible', true);
-            isPenTracking = true;
-            inkTrail = [];
-            nextWaypointIdx = 0;
-            letterComplete = false;
-            resetSmoothingState();
-            setPenOverlayActive(true);
+            // Placement must succeed independently of pen/camera-access.
+            setLetterAnchorVisible(true);
+            applySettings();
+            const letterEl = document.querySelector('#urdu-letter');
+            bindLetterTextureLoadLogging(letterEl);
             hint.textContent = traceHintText();
             hint.style.display = 'block';
-            applySettings();
-            // Do not call getUserMedia here — it conflicts with the active WebXR AR
-            // session on single-camera devices. Pen tracing needs optional camera-access.
-            startPenFeedWatch();
+
+            // Pen feed starts after a frame so letter mesh can settle first.
+            requestAnimationFrame(function () {
+              isPenTracking = true;
+              inkTrail = [];
+              nextWaypointIdx = 0;
+              letterComplete = false;
+              resetSmoothingState();
+              setPenOverlayActive(true);
+              startPenFeedWatch();
+            });
+
             if (placeHintTimeout) clearTimeout(placeHintTimeout);
             placeHintTimeout = setTimeout(function () {
               if (!letterComplete) hint.style.display = 'none';
