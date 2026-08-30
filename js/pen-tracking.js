@@ -5,6 +5,7 @@
     AFRAME.registerComponent('xr-pen-feed', {
       tick: function () {
         if (global.__penFeedTick) global.__penFeedTick(this.el);
+        if (global.__penProjectTick) global.__penProjectTick(this.el);
       }
     });
   }
@@ -44,6 +45,26 @@
   let inkTrail = [];
   let nextWaypointIdx = 0;
   let letterComplete = false;
+  /** Viewport-normalized path; refreshed on A-Frame tick (same frame as XR camera). */
+  let lastViewportPath = [];
+  let lastHandResults = null;
+
+  function getViewportSize() {
+    const scene = document.querySelector('a-scene');
+    const afCanvas = scene && scene.renderer && scene.renderer.domElement;
+    if (afCanvas && afCanvas.clientWidth && afCanvas.clientHeight) {
+      return { w: afCanvas.clientWidth, h: afCanvas.clientHeight };
+    }
+    return { w: window.innerWidth, h: window.innerHeight };
+  }
+
+  function getActiveCamera(sceneEl) {
+    if (sceneEl && sceneEl.renderer && sceneEl.renderer.xr && sceneEl.is('ar-mode')) {
+      const xrCam = sceneEl.renderer.xr.getCamera && sceneEl.renderer.xr.getCamera();
+      if (xrCam) return xrCam;
+    }
+    return sceneEl ? sceneEl.camera : null;
+  }
 
   function drawDebugMarker(normX, normY, color, label, radius) {
     if (!global.ARDebug || !global.ARDebug.DEBUG || !ctx || !canvasEl) return;
@@ -59,65 +80,7 @@
     if (label) {
       ctx.font = 'bold 11px monospace';
       ctx.fillStyle = color;
-      ctx.strokeStyle = '#000';
-      ctx.lineWidth = 3;
-      ctx.strokeText(label, x + 12, y - 8);
       ctx.fillText(label, x + 12, y - 8);
-    }
-  }
-
-  /** Map image-normalized coords to where they appear after CSS stretch (client pixels). */
-  function imageNormToClientPx(nx, ny) {
-    if (!canvasEl) return null;
-    const cw = canvasEl.clientWidth;
-    const ch = canvasEl.clientHeight;
-    return { x: nx * cw, y: ny * ch };
-  }
-
-  /** object-fit:cover mapping — image norm → buffer px if canvas were cover-fit. */
-  function imageNormToCoverBufferPx(nx, ny) {
-    if (!canvasEl) return null;
-    const iw = canvasEl.width;
-    const ih = canvasEl.height;
-    const cw = canvasEl.clientWidth;
-    const ch = canvasEl.clientHeight;
-    if (!iw || !ih || !cw || !ch) return null;
-    const imageAspect = iw / ih;
-    const displayAspect = cw / ch;
-    let scale, offsetX, offsetY;
-    if (imageAspect > displayAspect) {
-      scale = ch / ih;
-      offsetX = (cw - iw * scale) / 2;
-      offsetY = 0;
-    } else {
-      scale = cw / iw;
-      offsetX = 0;
-      offsetY = (ch - ih * scale) / 2;
-    }
-    const clientX = offsetX + nx * iw * scale;
-    const clientY = offsetY + ny * ih * scale;
-    // buffer px (linear map from client box to buffer)
-    return {
-      x: (clientX / cw) * iw,
-      y: (clientY / ch) * ih,
-      clientX: clientX,
-      clientY: clientY
-    };
-  }
-
-  function drawDebugMarkerBufferPx(px, py, color, label) {
-    if (!global.ARDebug || !global.ARDebug.DEBUG || !ctx || !canvasEl) return;
-    ctx.beginPath();
-    ctx.arc(px, py, 9, 0, 2 * Math.PI);
-    ctx.fillStyle = color;
-    ctx.fill();
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = '#000';
-    ctx.stroke();
-    if (label) {
-      ctx.font = '10px monospace';
-      ctx.fillStyle = color;
-      ctx.fillText(label, px + 10, py + 4);
     }
   }
 
@@ -125,6 +88,7 @@
     smoothedPenX = null;
     smoothedPenY = null;
     smoothedProjectedPath = [];
+    lastViewportPath = [];
   }
 
   function smoothPenTip(rawX, rawY) {
@@ -380,12 +344,81 @@
   }
 
   function syncTrackingCanvasSize() {
-    const size = getTrackingImageSize();
-    if (!size || !canvasEl) return;
-    if (canvasEl.width !== size.w || canvasEl.height !== size.h) {
-      canvasEl.width = size.w;
-      canvasEl.height = size.h;
+    const vp = getViewportSize();
+    if (!canvasEl || !vp.w || !vp.h) return;
+    if (canvasEl.width !== vp.w || canvasEl.height !== vp.h) {
+      canvasEl.width = vp.w;
+      canvasEl.height = vp.h;
     }
+  }
+
+  /** MediaPipe image norm (0–1) → viewport norm matching on-screen AR compositor. */
+  function imageNormToViewportNorm(ix, iy, viewportW, viewportH, imageW, imageH) {
+    const iw = imageW || trackingImageW;
+    const ih = imageH || trackingImageH;
+    if (!iw || !ih || !viewportW || !viewportH) return null;
+    const imageAspect = iw / ih;
+    const containerAspect = viewportW / viewportH;
+    let visibleW, visibleH, offsetX, offsetY;
+    if (imageAspect > containerAspect) {
+      visibleH = ih;
+      visibleW = ih * containerAspect;
+      offsetX = (iw - visibleW) / 2;
+      offsetY = 0;
+    } else {
+      visibleW = iw;
+      visibleH = iw / containerAspect;
+      offsetX = 0;
+      offsetY = (ih - visibleH) / 2;
+    }
+    const px = ix * iw;
+    const py = iy * ih;
+    return {
+      x: (px - offsetX) / visibleW,
+      y: (py - offsetY) / visibleH
+    };
+  }
+
+  function letterUVToLocal(u, v, letterEl) {
+    let w = 1;
+    let h = 1;
+    if (letterEl) {
+      const mesh = letterEl.getObject3D('mesh');
+      const params = mesh && mesh.geometry && mesh.geometry.parameters;
+      if (params && params.width && params.height) {
+        w = params.width;
+        h = params.height;
+      }
+    }
+    return new THREE.Vector3((u - 0.5) * w, (0.5 - v) * h, 0);
+  }
+
+  function projectLetterPathToViewportNorm(pathUV, sceneEl) {
+    const anchorEl = document.querySelector('#letter-anchor');
+    const letterEl = document.querySelector('#urdu-letter');
+    if (!sceneEl) sceneEl = document.querySelector('a-scene');
+    const isVis = global.ARPlacement
+      ? global.ARPlacement.isAFrameVisible(anchorEl)
+      : (anchorEl && (anchorEl.getAttribute('visible') === true || anchorEl.getAttribute('visible') === 'true'));
+    if (!anchorEl || !isVis || !letterEl || !sceneEl || !sceneEl.renderer) {
+      return [];
+    }
+    const threeCam = getActiveCamera(sceneEl);
+    if (!threeCam) return [];
+
+    const letterObj = letterEl.object3D;
+    letterObj.updateWorldMatrix(true, false);
+    threeCam.updateMatrixWorld(true);
+
+    const projected = [];
+    for (let i = 0; i < pathUV.length; i++) {
+      const uv = pathUV[i];
+      const world = letterUVToLocal(uv.x, uv.y, letterEl).applyMatrix4(letterObj.matrixWorld);
+      const ndc = world.clone().project(threeCam);
+      if (ndc.z < -1 || ndc.z > 1) continue;
+      projected.push({ x: (ndc.x + 1) / 2, y: (-ndc.y + 1) / 2 });
+    }
+    return projected;
   }
 
   function distToSegment(px, py, x1, y1, x2, y2) {
@@ -409,120 +442,6 @@
     return min;
   }
 
-  function letterUVToLocal(u, v) {
-    return new THREE.Vector3(u - 0.5, 0.5 - v, 0);
-  }
-
-  function viewportNormToVideoNorm(vx, vy, viewportW, viewportH, imageW, imageH) {
-    const size = getTrackingImageSize();
-    const iw = imageW || (size ? size.w : 0) || (canvasEl ? canvasEl.width : 0);
-    const ih = imageH || (size ? size.h : 0) || (canvasEl ? canvasEl.height : 0);
-    if (!iw || !ih || !viewportW || !viewportH) return null;
-    const imageAspect = iw / ih;
-    const containerAspect = viewportW / viewportH;
-    let visibleW, visibleH, offsetX, offsetY;
-    if (imageAspect > containerAspect) {
-      visibleH = ih;
-      visibleW = ih * containerAspect;
-      offsetX = (iw - visibleW) / 2;
-      offsetY = 0;
-    } else {
-      visibleW = iw;
-      visibleH = iw / containerAspect;
-      offsetX = 0;
-      offsetY = (ih - visibleH) / 2;
-    }
-    const px = offsetX + vx * visibleW;
-    const py = offsetY + vy * visibleH;
-    return { x: px / iw, y: py / ih };
-  }
-
-  function projectLetterPathToVideoNorm(pathUV) {
-    const anchorEl = document.querySelector('#letter-anchor');
-    const letterEl = document.querySelector('#urdu-letter');
-    const sceneEl = document.querySelector('a-scene');
-    const isVis = global.ARPlacement
-      ? global.ARPlacement.isAFrameVisible(anchorEl)
-      : (anchorEl && (anchorEl.getAttribute('visible') === true || anchorEl.getAttribute('visible') === 'true'));
-    if (!anchorEl || !isVis || !letterEl || !sceneEl || !sceneEl.renderer || !sceneEl.camera) {
-      return [];
-    }
-    const threeCam = sceneEl.camera;
-    const letterObj = letterEl.object3D;
-    const afCanvas = sceneEl.renderer.domElement;
-    const cw = afCanvas.clientWidth;
-    const ch = afCanvas.clientHeight;
-    if (!cw || !ch || !pathUV.length) return [];
-
-    letterObj.updateWorldMatrix(true, false);
-    const imageSize = getTrackingImageSize();
-    const projected = [];
-
-    if (global.ARDebug && global.ARDebug.DEBUG && global.ARDebug.logProjectionDebug) {
-      const xrCam = sceneEl.renderer.xr && sceneEl.renderer.xr.getCamera
-        ? sceneEl.renderer.xr.getCamera()
-        : null;
-      const lines = [
-        'proj: MediaPipe callback (not A-Frame tick)',
-        'afCanvas: ' + cw + '×' + ch + ' buffer=' + afCanvas.width + '×' + afCanvas.height,
-        'trackCanvas: ' + (canvasEl ? canvasEl.clientWidth + '×' + canvasEl.clientHeight : 'n/a') +
-          ' buffer=' + (canvasEl ? canvasEl.width + '×' + canvasEl.height : 'n/a'),
-        'image: ' + (imageSize ? imageSize.w + '×' + imageSize.h : 'n/a'),
-        'cam: scene.camera' + (xrCam ? ' xrCam=' + (xrCam === threeCam ? 'same' : 'DIFFERENT') : ''),
-        'ar-mode: ' + (sceneEl.is('ar-mode') ? 'yes' : 'no')
-      ];
-      if (imageSize && canvasEl) {
-        lines.push(
-          'aspect image=' + (imageSize.w / imageSize.h).toFixed(3) +
-          ' client=' + (canvasEl.clientWidth / canvasEl.clientHeight).toFixed(3) +
-          ' buffer=' + (canvasEl.width / canvasEl.height).toFixed(3)
-        );
-      }
-      global.ARDebug.logProjectionDebug(lines);
-    }
-
-    for (let i = 0; i < pathUV.length; i++) {
-      const uv = pathUV[i];
-      const world = letterUVToLocal(uv.x, uv.y).applyMatrix4(letterObj.matrixWorld);
-      const ndc = world.clone().project(threeCam);
-      if (ndc.z < -1 || ndc.z > 1) continue;
-      const videoNorm = viewportNormToVideoNorm(
-        (ndc.x + 1) / 2,
-        (-ndc.y + 1) / 2,
-        cw,
-        ch,
-        imageSize ? imageSize.w : 0,
-        imageSize ? imageSize.h : 0
-      );
-      if (videoNorm) projected.push(videoNorm);
-    }
-    return projected;
-  }
-
-  /** Debug: project one UV through full pipeline; returns intermediates. */
-  function projectUVDebug(uv) {
-    const letterEl = document.querySelector('#urdu-letter');
-    const sceneEl = document.querySelector('a-scene');
-    if (!letterEl || !sceneEl || !sceneEl.camera || !sceneEl.renderer) return null;
-    const threeCam = sceneEl.camera;
-    const letterObj = letterEl.object3D;
-    const afCanvas = sceneEl.renderer.domElement;
-    const cw = afCanvas.clientWidth;
-    const ch = afCanvas.clientHeight;
-    const imageSize = getTrackingImageSize();
-    letterObj.updateWorldMatrix(true, false);
-    const world = letterUVToLocal(uv.x, uv.y).applyMatrix4(letterObj.matrixWorld);
-    const ndc = world.clone().project(threeCam);
-    const vx = (ndc.x + 1) / 2;
-    const vy = (-ndc.y + 1) / 2;
-    const videoNorm = viewportNormToVideoNorm(
-      vx, vy, cw, ch,
-      imageSize ? imageSize.w : 0,
-      imageSize ? imageSize.h : 0
-    );
-    return { ndc: ndc, viewportNorm: { x: vx, y: vy }, videoNorm: videoNorm };
-  }
-
   function drawProjectedPath(path, strokeStyle) {
     if (!path.length || !ctx || !canvasEl) return;
     ctx.beginPath();
@@ -535,24 +454,18 @@
     ctx.stroke();
   }
 
-  function onHandResults(results) {
-    if (!ctx || !canvasEl) return;
+  function renderPenOverlay(results) {
+    if (!ctx || !canvasEl || !isPenTracking) return;
     syncTrackingCanvasSize();
     ctx.clearRect(0, 0, canvasEl.width, canvasEl.height);
 
-    const pathUV = global.ARLetters ? global.ARLetters.currentTargetPathUV : [];
     const pathIsDefault = global.ARLetters ? global.ARLetters.currentPathIsDefault : true;
+    const activePath = lastViewportPath;
+    projectedScreenPath = activePath;
 
-    let rawProjectedPath = [];
-    if (isPenTracking) {
-      rawProjectedPath = projectLetterPathToVideoNorm(pathUV);
-      projectedScreenPath = smoothProjectedPath(rawProjectedPath);
-    } else {
-      projectedScreenPath = [];
-      smoothedProjectedPath = [];
-    }
+    const vp = getViewportSize();
+    const imageSize = getTrackingImageSize();
 
-    const activePath = projectedScreenPath;
     const debugState = {
       feedSource: lastHandFeedSource,
       handDetected: false,
@@ -568,123 +481,107 @@
     if (activePath.length > 0) {
       drawProjectedPath(
         activePath,
-        pathIsDefault ? 'rgba(255, 165, 0, 0.35)' : 'rgba(0, 123, 255, 0.3)'
+        pathIsDefault ? 'rgba(255, 165, 0, 0.5)' : 'rgba(0, 123, 255, 0.55)'
       );
     }
 
-    // ?debug=1: letter-center projection markers (guide-line drift)
-    if (isPenTracking && global.ARDebug && global.ARDebug.DEBUG) {
-      const center = projectUVDebug({ x: 0.5, y: 0.5 });
-      if (center && center.videoNorm) {
-        drawDebugMarker(center.videoNorm.x, center.videoNorm.y, 'rgba(255, 0, 255, 0.95)', 'ctr', 12);
-        if (center.viewportNorm) {
-          drawDebugMarker(center.viewportNorm.x, center.viewportNorm.y, 'rgba(255, 255, 0, 0.8)', 'ndc', 8);
-        }
-        const coverPx = imageNormToCoverBufferPx(center.videoNorm.x, center.videoNorm.y);
-        if (coverPx) {
-          drawDebugMarkerBufferPx(coverPx.x, coverPx.y, 'rgba(0, 255, 255, 0.9)', 'cover');
-        }
-      }
+    if (global.ARDebug && global.ARDebug.DEBUG && activePath.length > 0) {
+      drawDebugMarker(activePath[0].x, activePath[0].y, 'rgba(0,255,0,0.9)', 'p0', 8);
+      const end = activePath[activePath.length - 1];
+      drawDebugMarker(end.x, end.y, 'rgba(255,0,0,0.9)', 'p1', 8);
     }
 
-    if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0 && isPenTracking) {
+    if (results && results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
       debugState.handDetected = true;
-      const landmarks = results.multiHandLandmarks[0];
-      const indexMcp = landmarks[5];
-      const indexTip = landmarks[8];
-      const dirX = indexTip.x - indexMcp.x;
-      const dirY = indexTip.y - indexMcp.y;
-      const rawPenX = indexTip.x + dirX * 0.8;
-      const rawPenY = indexTip.y + dirY * 0.8;
-      const pen = smoothPenTip(rawPenX, rawPenY);
-      const penTipX = pen.x;
-      const penTipY = pen.y;
-      debugState.penX = penTipX;
-      debugState.penY = penTipY;
-      debugState.rawTipX = indexTip.x;
-      debugState.rawTipY = indexTip.y;
-      debugState.rawPenX = rawPenX;
-      debugState.rawPenY = rawPenY;
-      debugState.mirrorTipX = 1 - indexTip.x;
+      const indexTip = results.multiHandLandmarks[0][8];
+      const vpTip = imageNormToViewportNorm(
+        indexTip.x, indexTip.y,
+        vp.w, vp.h,
+        imageSize ? imageSize.w : trackingImageW,
+        imageSize ? imageSize.h : trackingImageH
+      );
+      if (vpTip) {
+        const pen = smoothPenTip(vpTip.x, vpTip.y);
+        const penTipX = pen.x;
+        const penTipY = pen.y;
+        debugState.penX = penTipX;
+        debugState.penY = penTipY;
+        debugState.rawTipX = indexTip.x;
+        debugState.rawTipY = indexTip.y;
+        debugState.rawPenX = vpTip.x;
+        debugState.rawPenY = vpTip.y;
 
-      const x = penTipX * canvasEl.width;
-      const y = penTipY * canvasEl.height;
+        const x = penTipX * canvasEl.width;
+        const y = penTipY * canvasEl.height;
 
-      // ?debug=1: pen-tip stage markers (fixed offset diagnosis)
-      if (global.ARDebug && global.ARDebug.DEBUG) {
-        drawDebugMarker(indexTip.x, indexTip.y, 'rgba(255, 255, 0, 0.95)', 'tip', 11);
-        drawDebugMarker(rawPenX, rawPenY, 'rgba(255, 140, 0, 0.95)', 'ext', 9);
-        drawDebugMarker(1 - indexTip.x, indexTip.y, 'rgba(180, 0, 255, 0.85)', 'mir', 9);
-        const coverTip = imageNormToCoverBufferPx(indexTip.x, indexTip.y);
-        if (coverTip) {
-          drawDebugMarkerBufferPx(coverTip.x, coverTip.y, 'rgba(255, 255, 255, 0.9)', 'tipC');
+        if (global.ARDebug && global.ARDebug.DEBUG) {
+          drawDebugMarker(vpTip.x, vpTip.y, 'rgba(255, 255, 0, 0.95)', 'tip', 11);
         }
-      }
 
-      ctx.beginPath();
-      ctx.moveTo(indexTip.x * canvasEl.width, indexTip.y * canvasEl.height);
-      ctx.lineTo(x, y);
-      ctx.lineWidth = 6;
-      ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)';
-      ctx.stroke();
-
-      let isOnPath = false;
-      if (activePath.length > 0 && !letterComplete) {
-        const minDist = minDistToPath(penTipX, penTipY, activePath);
-        debugState.minDist = minDist;
-        if (minDist < PATH_HIT_THRESHOLD) {
-          isOnPath = true;
-          inkTrail.push({ x: penTipX, y: penTipY });
-          if (nextWaypointIdx < activePath.length) {
-            const wp = activePath[nextWaypointIdx];
-            if (Math.hypot(penTipX - wp.x, penTipY - wp.y) < PATH_HIT_THRESHOLD) {
-              nextWaypointIdx++;
-              debugState.nextWaypoint = nextWaypointIdx;
+        let isOnPath = false;
+        if (activePath.length > 0 && !letterComplete) {
+          const minDist = minDistToPath(penTipX, penTipY, activePath);
+          debugState.minDist = minDist;
+          if (minDist < PATH_HIT_THRESHOLD) {
+            isOnPath = true;
+            inkTrail.push({ x: penTipX, y: penTipY });
+            if (nextWaypointIdx < activePath.length) {
+              const wp = activePath[nextWaypointIdx];
+              if (Math.hypot(penTipX - wp.x, penTipY - wp.y) < PATH_HIT_THRESHOLD) {
+                nextWaypointIdx++;
+                debugState.nextWaypoint = nextWaypointIdx;
+              }
             }
           }
         }
-      }
-      debugState.isOnPath = isOnPath;
+        debugState.isOnPath = isOnPath;
 
-      if (inkTrail.length > 1) {
-        ctx.beginPath();
-        ctx.moveTo(inkTrail[0].x * canvasEl.width, inkTrail[0].y * canvasEl.height);
-        for (let i = 1; i < inkTrail.length; i++) {
-          ctx.lineTo(inkTrail[i].x * canvasEl.width, inkTrail[i].y * canvasEl.height);
+        if (inkTrail.length > 1) {
+          ctx.beginPath();
+          ctx.moveTo(inkTrail[0].x * canvasEl.width, inkTrail[0].y * canvasEl.height);
+          for (let i = 1; i < inkTrail.length; i++) {
+            ctx.lineTo(inkTrail[i].x * canvasEl.width, inkTrail[i].y * canvasEl.height);
+          }
+          ctx.lineWidth = 10;
+          ctx.strokeStyle = 'rgba(0, 0, 0, 0.9)';
+          ctx.lineCap = 'round';
+          ctx.lineJoin = 'round';
+          ctx.stroke();
         }
-        ctx.lineWidth = 10;
-        ctx.strokeStyle = 'rgba(0, 0, 0, 0.9)';
-        ctx.lineCap = 'round';
-        ctx.lineJoin = 'round';
+
+        ctx.beginPath();
+        ctx.arc(x, y, 12, 0, 2 * Math.PI);
+        ctx.fillStyle = isOnPath ? 'rgba(0, 255, 0, 0.9)' : 'rgba(255, 0, 0, 0.9)';
+        ctx.fill();
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = '#fff';
         ctx.stroke();
-      }
 
-      ctx.beginPath();
-      ctx.arc(x, y, 12, 0, 2 * Math.PI);
-      ctx.fillStyle = isOnPath ? 'rgba(0, 255, 0, 0.9)' : 'rgba(255, 0, 0, 0.9)';
-      ctx.fill();
-      ctx.lineWidth = 3;
-      ctx.strokeStyle = '#fff';
-      ctx.stroke();
-      if (global.ARDebug && global.ARDebug.DEBUG) {
-        ctx.font = '10px monospace';
-        ctx.fillStyle = '#fff';
-        ctx.fillText('pen', x + 14, y + 4);
+        if (!letterComplete && activePath.length > 0 && nextWaypointIdx >= activePath.length) {
+          letterComplete = true;
+          document.getElementById('place-hint').textContent =
+            '✅ Letter Complete! Tap PLACE to reposition or pick another letter.';
+          document.getElementById('place-hint').style.display = 'block';
+          if (global.ARPlacement) global.ARPlacement.clearPlaceHintTimeout();
+        }
       }
-
-      if (!letterComplete && activePath.length > 0 && nextWaypointIdx >= activePath.length) {
-        letterComplete = true;
-        document.getElementById('place-hint').textContent =
-          '✅ Letter Complete! Tap PLACE to reposition or pick another letter.';
-        document.getElementById('place-hint').style.display = 'block';
-        if (global.ARPlacement) global.ARPlacement.clearPlaceHintTimeout();
+    } else if (!letterComplete) {
+      const hint = document.getElementById('place-hint');
+      if (hint && isPenTracking) {
+        hint.textContent = 'Show your hand holding the pen to the camera';
+        hint.style.display = 'block';
       }
-    } else if (isPenTracking && !letterComplete) {
-      document.getElementById('place-hint').textContent = 'Show your hand holding the pen to the camera';
-      document.getElementById('place-hint').style.display = 'block';
     }
 
     if (global.ARDebug) {
+      if (global.ARDebug.DEBUG && global.ARDebug.logProjectionDebug) {
+        global.ARDebug.logProjectionDebug([
+          'space: viewport (matches AR compositor)',
+          'pathPts: ' + activePath.length,
+          'viewport: ' + vp.w + '×' + vp.h,
+          'cameraImg: ' + (imageSize ? imageSize.w + '×' + imageSize.h : 'n/a')
+        ]);
+      }
       global.ARDebug.updatePenDebugPanel(debugState, {
         penTracking: isPenTracking,
         getCameraImageStatus: lastGetCameraImageStatus,
@@ -695,6 +592,10 @@
         letterOps: global.ARDebug.letterOpSummary ? global.ARDebug.letterOpSummary() : ''
       });
     }
+  }
+
+  function onHandResults(results) {
+    lastHandResults = results;
   }
 
   async function initCamera() {
@@ -734,6 +635,7 @@
     isPenTracking = false;
     clearPenFeedWatch();
     pendingHandImage = null;
+    lastHandResults = null;
     inkTrail = [];
     nextWaypointIdx = 0;
     letterComplete = false;
@@ -756,12 +658,16 @@
     startPenFeedWatch();
     if (global.ARDebug) {
       global.ARDebug.logOnce('pen-start', 'pen tracking started after place');
+      if (global.ARDebug.showPanel) {
+        global.ARDebug.showPanel('Pen tracing active — show hand to camera');
+      }
     }
   }
 
   function onTraceReset() {
     projectedScreenPath = [];
     smoothedProjectedPath = [];
+    lastViewportPath = [];
     inkTrail = [];
     nextWaypointIdx = 0;
     letterComplete = false;
@@ -781,6 +687,15 @@
         noteCaptureFailure('tick threw: ' + (e && e.message ? e.message : String(e)));
         pendingHandImage = null;
       }
+    };
+
+    global.__penProjectTick = function (sceneEl) {
+      if (!isPenTracking || !sceneEl.is('ar-mode')) {
+        lastViewportPath = [];
+        return;
+      }
+      const pathUV = global.ARLetters ? global.ARLetters.currentTargetPathUV : [];
+      lastViewportPath = projectLetterPathToViewportNorm(pathUV, sceneEl);
     };
 
     if (typeof Hands !== 'undefined') {
@@ -820,6 +735,9 @@
             console.error('MediaPipe hands.send failed:', err);
           }
         }
+      }
+      if (isPenTracking) {
+        renderPenOverlay(lastHandResults);
       }
       requestAnimationFrame(processFrame);
     }

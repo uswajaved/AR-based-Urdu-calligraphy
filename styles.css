@@ -3,13 +3,13 @@ body { margin: 0; overflow: hidden; font-family: sans-serif; }
 /* --- CAMERA PASSTHROUGH & PEN-TRACKING LAYERS --- */
 #cam-video, #tracking-canvas {
   position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-  object-fit: cover;
   z-index: 0;
 }
 #tracking-canvas {
   z-index: 1;
   background: transparent;
   pointer-events: none;
+  /* Buffer size = viewport; no object-fit stretch on 2D canvas */
 }
 /* Inside dom-overlay: above nav chrome; XR letter shows through transparent pixels */
 #tracking-canvas.pen-overlay-active {
@@ -24,10 +24,11 @@ body { margin: 0; overflow: hidden; font-family: sans-serif; }
 }
 #pen-debug-panel {
   position: fixed; top: 90px; left: 8px; z-index: 250;
-  background: rgba(0, 0, 0, 0.75); color: #0f0;
+  background: rgba(0, 0, 0, 0.85); color: #0f0;
   font: 11px/1.4 monospace; padding: 8px 10px;
   border-radius: 6px; max-width: 280px; pointer-events: none;
   display: none; white-space: pre-wrap;
+  border: 1px solid #0f0;
 }
 
 a-scene, .a-canvas {

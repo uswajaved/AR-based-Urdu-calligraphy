@@ -61,10 +61,20 @@
     if (DEBUG && panelEl) panelEl.style.display = 'block';
   }
 
+  function showPanel(message) {
+    if (!DEBUG || !panelEl) return;
+    panelEl.style.display = 'block';
+    panelEl.setAttribute('aria-hidden', 'false');
+    if (message) {
+      panelEl.textContent = 'debug=1\n' + message;
+    }
+  }
+
   function updatePenDebugPanel(state, extras) {
     if (!DEBUG || !panelEl) return;
     extras = extras || {};
     panelEl.style.display = 'block';
+    panelEl.setAttribute('aria-hidden', 'false');
     panelEl.textContent =
       'debug=1\n' +
       'penTracking: ' + (extras.penTracking ? 'on' : 'off') + '\n' +
@@ -99,14 +109,19 @@
     logLetterOp: logLetterOp,
     logProjectionDebug: logProjectionDebug,
     letterOpSummary: letterOpSummary,
+    showPanel: showPanel,
     updatePenDebugPanel: updatePenDebugPanel,
     logCaptureAttempt: logCaptureAttempt,
     get panelEl() { return panelEl; }
   };
 
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', initDebugPanel);
+    document.addEventListener('DOMContentLoaded', function () {
+      initDebugPanel();
+      if (DEBUG) showPanel('Debug on — add hand after placing letter');
+    });
   } else {
     initDebugPanel();
+    if (DEBUG) showPanel('Debug on — add hand after placing letter');
   }
 })(window);
