@@ -44,7 +44,7 @@
         }
       })();
     </script>
-    <script src="https://aframe.io/releases/1.7.0/aframe.min.js"></script>
+    <script src="https://aframe.io/releases/1.8.0/aframe.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
     <style>
       body { margin: 0; overflow: hidden; font-family: sans-serif; }
@@ -217,6 +217,7 @@
     -->
     <a-scene
       webxr="optionalFeatures: hit-test, local-floor, dom-overlay; overlayElement: #dom-overlay;"
+      ar-hit-test="target: #letter-anchor"
       renderer="colorManagement: true; alpha: true; physicallyCorrectLights: true;"
       xr-mode-ui="XRMode: ar"
       loading-screen="enabled: false">
@@ -226,18 +227,6 @@
              in the repo and must not block scene.hasLoaded. Baa.svg is. -->
         <img id="baa-img" src="Baa.svg">
       </a-assets>
-
-      <!-- Reticle: shows where the letter WOULD land. `ar-hit-test` continuously
-           moves this entity to match the detected real-world surface under the
-           camera's forward ray. `target` is the entity to move/reveal on tap. -->
-      <a-entity
-        id="reticle"
-        ar-hit-test="target:#letter-anchor"
-        geometry="primitive: ring; radiusInner: 0.02; radiusOuter: 0.03"
-        material="color: #007bff; shader: flat"
-        rotation="-90 0 0"
-        visible="false">
-      </a-entity>
 
       <!-- The placed letter. Hidden until the user taps to anchor it in place. -->
       <a-entity id="letter-anchor" visible="false">
@@ -847,12 +836,23 @@
         document.querySelector('#bottom-nav').style.display = 'none';
         document.getElementById('place-hint').style.display = 'none';
         document.querySelector('#letter-anchor').setAttribute('visible', false);
-        document.querySelector('#reticle').setAttribute('visible', false);
         if (placeHintTimeout) clearTimeout(placeHintTimeout);
         stopCamera();
         const scene = document.querySelector('a-scene');
         if (scene && (scene.is('vr-mode') || scene.is('ar-mode'))) {
           scene.exitVR();
+        }
+      }
+
+      function resetHitTestPlacement() {
+        const scene = document.querySelector('a-scene');
+        if (!scene || !scene.is('ar-mode')) return;
+        const hitTestComp = scene.components['ar-hit-test'];
+        if (!hitTestComp) return;
+        hitTestComp.hasPosedOnce = false;
+        hitTestComp.bboxMesh.visible = false;
+        if (hitTestComp.viewerHitTest) {
+          hitTestComp.hitTest = hitTestComp.viewerHitTest;
         }
       }
 
@@ -862,7 +862,7 @@
         nextWaypointIdx = 0;
         letterComplete = false;
         document.querySelector('#letter-anchor').setAttribute('visible', false);
-        document.querySelector('#reticle').setAttribute('visible', false);
+        resetHitTestPlacement();
         document.getElementById('place-hint').textContent = 'Move your phone to find a surface, then tap to place';
         document.getElementById('place-hint').style.display = 'block';
       }
@@ -914,6 +914,36 @@
           scene.addEventListener('exit-vr', function () {
             setPassthroughLayersVisible(true);
           });
+
+          const anchor = document.querySelector('#letter-anchor');
+          const hint = document.getElementById('place-hint');
+
+          scene.addEventListener('ar-hit-test-start', () => {
+            hint.textContent = 'Move your phone to find a surface, then tap to place';
+            hint.style.display = 'block';
+          });
+
+          scene.addEventListener('ar-hit-test-achieved', () => {
+            hint.textContent = 'Surface found — tap to place the letter';
+            hint.style.display = 'block';
+          });
+
+          scene.addEventListener('ar-hit-test-select', () => {
+            anchor.setAttribute('visible', true);
+            isPenTracking = true;
+            inkTrail = [];
+            nextWaypointIdx = 0;
+            letterComplete = false;
+            hint.textContent = traceHintText();
+            hint.style.display = 'block';
+            applySettings();
+            // Do not call getUserMedia here — it conflicts with the active WebXR AR
+            // session on single-camera devices. Pen tracking needs WebXR camera-access.
+            if (placeHintTimeout) clearTimeout(placeHintTimeout);
+            placeHintTimeout = setTimeout(function () {
+              if (!letterComplete) hint.style.display = 'none';
+            }, 15000);
+          });
         }
 
         hands = new Hands({
@@ -937,32 +967,6 @@
           requestAnimationFrame(processFrame);
         }
         processFrame();
-
-        const reticle = document.querySelector('#reticle');
-        const anchor = document.querySelector('#letter-anchor');
-        const hint = document.getElementById('place-hint');
-
-        reticle.addEventListener('ar-hit-test-start', () => {
-          reticle.setAttribute('visible', true);
-        });
-
-        reticle.addEventListener('ar-hit-test-select', () => {
-          anchor.setAttribute('visible', true);
-          reticle.setAttribute('visible', false);
-          isPenTracking = true;
-          inkTrail = [];
-          nextWaypointIdx = 0;
-          letterComplete = false;
-          hint.textContent = traceHintText();
-          hint.style.display = 'block';
-          applySettings();
-          // Do not call getUserMedia here — it conflicts with the active WebXR AR
-          // session on single-camera devices. Pen tracking needs WebXR camera-access.
-          if (placeHintTimeout) clearTimeout(placeHintTimeout);
-          placeHintTimeout = setTimeout(function () {
-            if (!letterComplete) hint.style.display = 'none';
-          }, 15000);
-        });
       });
 
       (function enableDragScroll() {
