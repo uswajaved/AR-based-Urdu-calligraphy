@@ -499,6 +499,12 @@
         return min;
       }
 
+      function isAFrameVisible(el) {
+        if (!el) return false;
+        const v = el.getAttribute('visible');
+        return v === true || v === 'true';
+      }
+
       function letterUVToLocal(u, v) {
         return new THREE.Vector3(u - 0.5, 0.5 - v, 0);
       }
@@ -531,7 +537,7 @@
         const letterEl = document.querySelector('#urdu-letter');
         const cameraEl = document.querySelector('[camera]');
         const sceneEl = document.querySelector('a-scene');
-        if (!anchorEl || anchorEl.getAttribute('visible') !== 'true' || !letterEl || !cameraEl || !sceneEl || !sceneEl.renderer) {
+        if (!anchorEl || !isAFrameVisible(anchorEl) || !letterEl || !cameraEl || !sceneEl || !sceneEl.renderer) {
           return [];
         }
         const threeCam = cameraEl.getObject3D('camera');
@@ -766,7 +772,6 @@
 
       // Called from the Home Screen Grid
       async function selectLetter(filename, character) {
-        await startCameraIfNeeded();
         resetTraceProgress(filename);
 
         document.querySelector('#home-screen').style.display = 'none';
@@ -814,7 +819,6 @@
 
       // Called from the Top Nav Scroller
       async function changeLetterNav(filename, element) {
-        await startCameraIfNeeded();
         resetTraceProgress(filename);
 
         let letterEl = document.querySelector('#urdu-letter');
@@ -826,7 +830,7 @@
         element.classList.add('active');
         element.scrollIntoView({behavior: "smooth", inline: "center", block: "nearest"});
 
-        if (document.querySelector('#letter-anchor').getAttribute('visible') === 'true') {
+        if (isAFrameVisible(document.querySelector('#letter-anchor'))) {
           document.getElementById('place-hint').textContent = traceHintText();
           document.getElementById('place-hint').style.display = 'block';
         }
@@ -883,11 +887,34 @@
         applySettings();
       }
 
+      function setPassthroughLayersVisible(show) {
+        if (videoEl) videoEl.style.display = show ? '' : 'none';
+        if (canvasEl) canvasEl.style.display = show ? '' : 'none';
+      }
+
       document.addEventListener('DOMContentLoaded', () => {
         videoEl = document.getElementById('cam-video');
         canvasEl = document.getElementById('tracking-canvas');
         ctx = canvasEl.getContext('2d');
         debugPanelEl = document.getElementById('pen-debug-panel');
+
+        const scene = document.querySelector('a-scene');
+        if (scene) {
+          scene.addEventListener('loaded', function () {
+            if (scene.renderer) {
+              scene.renderer.setClearColor(0x000000, 0);
+            }
+          });
+          scene.addEventListener('enter-vr', function () {
+            // WebXR owns the back camera during immersive AR; release getUserMedia
+            // so enterAR / hit-test / letter placement are not blocked or frozen.
+            stopCamera();
+            setPassthroughLayersVisible(false);
+          });
+          scene.addEventListener('exit-vr', function () {
+            setPassthroughLayersVisible(true);
+          });
+        }
 
         hands = new Hands({
           locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
@@ -929,6 +956,8 @@
           hint.textContent = traceHintText();
           hint.style.display = 'block';
           applySettings();
+          // Do not call getUserMedia here — it conflicts with the active WebXR AR
+          // session on single-camera devices. Pen tracking needs WebXR camera-access.
           if (placeHintTimeout) clearTimeout(placeHintTimeout);
           placeHintTimeout = setTimeout(function () {
             if (!letterComplete) hint.style.display = 'none';
