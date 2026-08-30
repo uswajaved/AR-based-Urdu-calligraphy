@@ -67,8 +67,23 @@
         background: transparent;
         pointer-events: none;
       }
+      /* Inside dom-overlay: sit above nav chrome but let XR letter show through transparent pixels */
       #tracking-canvas.pen-overlay-active {
-        z-index: 3 !important;
+        z-index: 40 !important;
+      }
+      #place-hint {
+        position: fixed; top: 15px; left: 50%; transform: translateX(-50%);
+        background: rgba(0,0,0,0.75); color: #fff; padding: 8px 16px;
+        border-radius: 20px; font-size: 13px; font-weight: bold;
+        z-index: 55; display: none; text-align: center; max-width: 80%;
+        pointer-events: none;
+      }
+      #pen-debug-panel {
+        position: fixed; top: 90px; left: 8px; z-index: 250;
+        background: rgba(0, 0, 0, 0.75); color: #0f0;
+        font: 11px/1.4 monospace; padding: 8px 10px;
+        border-radius: 6px; max-width: 280px; pointer-events: none;
+        display: none; white-space: pre-wrap;
       }
 
       a-scene, .a-canvas {
@@ -175,14 +190,6 @@
       .nav-btn span { font-size: 11px; font-weight: bold; color: #333; }
       .nav-icon { width: 28px; height: 28px; object-fit: contain; display: block; }
 
-      /* --- HINT BANNER (SLAM placement guidance) --- */
-      #place-hint {
-        position: fixed; top: 15px; left: 50%; transform: translateX(-50%);
-        background: rgba(0,0,0,0.75); color: #fff; padding: 8px 16px;
-        border-radius: 20px; font-size: 13px; font-weight: bold;
-        z-index: 55; display: none; text-align: center; max-width: 80%;
-      }
-
       /* --- MODALS --- */
       .modal-overlay {
         position: fixed; top: 0; left: 0; width: 100%; height: 100%;
@@ -200,23 +207,12 @@
       .preset-btns button.active { background: #007bff; color: white; border-color: #007bff; }
       .continue-btn { background: #007bff; color: white; width: 100%; padding: 12px; border: none; border-radius: 8px; font-weight: bold; font-size: 16px; cursor: pointer; margin-top: 10px;}
       input[type=range] { width: 100%; cursor: pointer; accent-color: #007bff; }
-
-      /* Toggle with ?debug=1 in the URL */
-      #pen-debug-panel {
-        position: fixed; top: 90px; left: 8px; z-index: 250;
-        background: rgba(0, 0, 0, 0.75); color: #0f0;
-        font: 11px/1.4 monospace; padding: 8px 10px;
-        border-radius: 6px; max-width: 260px; pointer-events: none;
-        display: none; white-space: pre-wrap;
-      }
     </style>
   </head>
   <body>
 
-    <!-- Camera passthrough + pen-tracking canvas (MediaPipe) -->
+    <!-- Camera passthrough (hidden during WebXR; not part of dom-overlay) -->
     <video id="cam-video" autoplay playsinline muted></video>
-    <canvas id="tracking-canvas"></canvas>
-    <div id="pen-debug-panel" aria-hidden="true"></div>
 
     <!-- 1. A-FRAME SCENE (WebXR hit-test, no markers) -->
     <!--
@@ -268,9 +264,6 @@
 
       <a-entity id="camera" camera></a-entity>
     </a-scene>
-
-    <!-- Placement guidance shown while looking for a surface / after placing -->
-    <div id="place-hint">Move your phone to find a surface, then tap to place</div>
 
     <!-- 2. HOME SCREEN -->
     <div id="home-screen">
@@ -325,6 +318,10 @@
     <!-- 3. AR NAVIGATION (dom-overlay content — must live inside #dom-overlay
          so it stays visible/interactive during the immersive-ar session) -->
     <div id="dom-overlay">
+      <!-- Must live inside dom-overlay or WebXR hides them during immersive AR -->
+      <canvas id="tracking-canvas"></canvas>
+      <div id="pen-debug-panel" aria-hidden="true"></div>
+      <div id="place-hint">Move your phone to find a surface, then tap to place</div>
 
       <!-- Top Nav (Scroller made of letter-box cards) -->
       <div id="top-nav">
@@ -493,7 +490,7 @@
       function agentLog(hypothesisId, location, message, data) {
         var payload = {
           sessionId: 'afe16d',
-          runId: 'pre-fix',
+            runId: 'post-overlay-fix',
           hypothesisId: hypothesisId,
           location: location,
           message: message,
@@ -1276,6 +1273,13 @@
         setPenOverlayActive(false);
         setLetterAnchorVisible(false);
         resetHitTestPlacement();
+        const scene = document.querySelector('a-scene');
+        if (scene) {
+          try {
+            scene.setAttribute('ar-hit-test', 'enabled', true);
+            xrCameraFeed.resetSessionState();
+          } catch (e) {}
+        }
         document.getElementById('place-hint').textContent = 'Move your phone to find a surface, then tap to place';
         document.getElementById('place-hint').style.display = 'block';
       }
@@ -1404,6 +1408,14 @@
             hint.textContent = traceHintText();
             hint.style.display = 'block';
 
+            // Stop further hit-test/reticle updates that can fight the placed letter.
+            try {
+              scene.setAttribute('ar-hit-test', 'enabled', false);
+              // #region agent log
+              agentLog('A', 'ar-hit-test-select', 'hit-test disabled after place', {});
+              // #endregion
+            } catch (e) {}
+
             // #region agent log
             __visSampleCount = 0;
             let __visFrame = 0;
@@ -1425,32 +1437,38 @@
                 letterObj: !!(letter && letter.object3D && letter.object3D.visible),
                 letterAttr: letter ? letter.getAttribute('visible') : null,
                 hitTestNull: hit ? hit.hitTest == null : null,
+                hitEnabled: hit ? hit.data.enabled : null,
                 bboxMeshVisible: hit && hit.bboxMesh ? !!hit.bboxMesh.visible : null,
                 bboxNeedsUpdate: hit ? !!hit.bboxNeedsUpdate : null,
                 canvasOverlay: canvasEl ? canvasEl.classList.contains('pen-overlay-active') : false,
-                canvasDisplay: canvasEl ? canvasEl.style.display : null
+                canvasDisplay: canvasEl ? canvasEl.style.display : null,
+                panelDisplay: debugPanelEl ? debugPanelEl.style.display : null
               });
               __visSampleCount++;
               if (__visSampleCount < 16) requestAnimationFrame(sampleLetterVisibility);
             })();
             // #endregion
 
-            // Pen feed starts after a frame so letter mesh can settle first.
+            // Pen feed: do NOT call getCameraImage yet — on Pixel it flickers the letter
+            // texture. Overlay is now inside dom-overlay so status/pen UI can show.
             requestAnimationFrame(function () {
-              isPenTracking = true;
-              inkTrail = [];
-              nextWaypointIdx = 0;
-              letterComplete = false;
-              resetSmoothingState();
-              setPenOverlayActive(true);
-              startPenFeedWatch();
+              isPenTracking = false;
+              setPenOverlayActive(false);
+              disableXrCameraFeed('skipped-getCameraImage (avoids letter flicker; camera-access unsafe)');
+              hint.textContent = 'Letter placed. Pen tracing unavailable on this device (camera-access).';
+              hint.style.display = 'block';
               // #region agent log
-              agentLog('E', 'pen-start-raf', 'pen tracking enabled', {
+              agentLog('E', 'pen-start-raf', 'pen capture skipped to protect letter', {
                 isPenTracking: isPenTracking,
-                overlay: canvasEl && canvasEl.classList.contains('pen-overlay-active'),
-                disabled: xrCameraFeedDisabled
+                disabled: xrCameraFeedDisabled,
+                reason: xrCameraFeedDisableReason,
+                overlayInsideDom: !!(canvasEl && canvasEl.closest('#dom-overlay')),
+                panelInsideDom: !!(debugPanelEl && debugPanelEl.closest('#dom-overlay'))
               });
               // #endregion
+              if (debugPanelEl) {
+                debugPanelEl.style.display = 'block';
+              }
             });
 
             if (placeHintTimeout) clearTimeout(placeHintTimeout);
