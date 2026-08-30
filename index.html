@@ -220,10 +220,11 @@
 
     <!-- 1. A-FRAME SCENE (WebXR hit-test, no markers) -->
     <!--
-      webxr optionalFeatures:
-        - hit-test    -> lets us query real-world surfaces (the SLAM part)
-        - local-floor -> gives us a sensible floor-relative reference space
-        - dom-overlay -> lets our HTML nav/modals stay visible during the AR session
+      webxr optionalFeatures (never requiredFeatures — camera-access is device-limited):
+        - hit-test      -> real-world surface detection
+        - local-floor   -> floor-relative reference space
+        - dom-overlay   -> HTML nav/modals during AR
+        - camera-access -> pen tracing feed (optional; fail soft if unsupported)
     -->
     <a-scene
       webxr="optionalFeatures: hit-test, local-floor, dom-overlay, camera-access; overlayElement: #dom-overlay;"
@@ -429,6 +430,8 @@
       const PATH_SMOOTHING_ALPHA = 0.3;
       // Reject single-frame path jumps larger than this (normalized coords) as shake outliers.
       const PATH_OUTLIER_THRESHOLD = 0.14;
+      // If XR camera-access never yields a frame after placement, surface a clear message.
+      const PEN_FEED_TIMEOUT_MS = 3000;
 
       let currentLetterFilename = 'Be.svg';
       let currentTargetPathUV = [];
@@ -439,6 +442,8 @@
       let smoothedPenY = null;
       let pendingHandImage = null;
       let lastHandFeedSource = 'none';
+      let lastGetCameraImageStatus = 'n/a';
+      let lastGetCameraImagePanelAt = 0;
       let trackingImageW = 0;
       let trackingImageH = 0;
       let videoStream = null;
@@ -449,9 +454,41 @@
       let ctx = null;
       let debugPanelEl = null;
       let placeHintTimeout = null;
+      let penFeedWatchTimeout = null;
       let inkTrail = [];
       let nextWaypointIdx = 0;
       let letterComplete = false;
+
+      function clearPenFeedWatch() {
+        if (penFeedWatchTimeout) {
+          clearTimeout(penFeedWatchTimeout);
+          penFeedWatchTimeout = null;
+        }
+      }
+
+      function startPenFeedWatch() {
+        clearPenFeedWatch();
+        lastHandFeedSource = 'none';
+        penFeedWatchTimeout = setTimeout(function () {
+          penFeedWatchTimeout = null;
+          if (!isPenTracking || lastHandFeedSource !== 'none') return;
+          isPenTracking = false;
+          setPenOverlayActive(false);
+          const hint = document.getElementById('place-hint');
+          if (hint) {
+            hint.textContent = 'Pen tracing unavailable on this device';
+            hint.style.display = 'block';
+          }
+          if (DEBUG_PEN_TRACKING && debugPanelEl) {
+            debugPanelEl.style.display = 'block';
+            debugPanelEl.textContent =
+              'debug=1\n' +
+              'penTracking: off\n' +
+              'feed: none\n' +
+              'camera-access: unsupported or blocked';
+          }
+        }, PEN_FEED_TIMEOUT_MS);
+      }
 
       // Stroke paths in letter-local UV space (0–1 on the letter image; u=left→right, v=top→bottom).
       const letterPaths = {
@@ -567,7 +604,18 @@
           const h = cam.height;
           if (!w || !h) return null;
 
-          const texture = binding.getCameraImage(cam);
+          let texture = null;
+          try {
+            texture = binding.getCameraImage(cam);
+            lastGetCameraImageStatus = texture == null
+              ? String(texture)
+              : ((texture.constructor && texture.constructor.name) || typeof texture);
+          } catch (e) {
+            lastGetCameraImageStatus = 'threw: ' + (e && e.message ? e.message : String(e));
+            if (DEBUG_PEN_TRACKING) refreshGetCameraImageDebugPanel(true);
+            return null;
+          }
+          if (DEBUG_PEN_TRACKING) refreshGetCameraImageDebugPanel(false);
           if (!texture) return null;
 
           if (!readbackFb) readbackFb = gl.createFramebuffer();
@@ -756,6 +804,20 @@
         return 'Hold phone steady and trace the letter';
       }
 
+      function refreshGetCameraImageDebugPanel(force) {
+        if (!DEBUG_PEN_TRACKING || !debugPanelEl) return;
+        const now = performance.now();
+        if (!force && now - lastGetCameraImagePanelAt < 250) return;
+        lastGetCameraImagePanelAt = now;
+        debugPanelEl.style.display = 'block';
+        const lines = (debugPanelEl.textContent || 'debug=1').split('\n').filter(function (line) {
+          return line && line.indexOf('getCameraImage:') !== 0;
+        });
+        if (!lines.length || lines[0] !== 'debug=1') lines.unshift('debug=1');
+        lines.push('getCameraImage: ' + lastGetCameraImageStatus);
+        debugPanelEl.textContent = lines.join('\n');
+      }
+
       function updateDebugPanel(state) {
         if (!DEBUG_PEN_TRACKING || !debugPanelEl) return;
         debugPanelEl.style.display = 'block';
@@ -763,6 +825,7 @@
           'debug=1\n' +
           'penTracking: ' + (isPenTracking ? 'on' : 'off') + '\n' +
           'feed: ' + (state.feedSource || 'none') + '\n' +
+          'getCameraImage: ' + lastGetCameraImageStatus + '\n' +
           'hand: ' + (state.handDetected ? 'yes' : 'no') + '\n' +
           'pen: ' + (state.penX != null ? state.penX.toFixed(3) + ', ' + state.penY.toFixed(3) : 'n/a') + '\n' +
           'onPath: ' + (state.isOnPath ? 'yes' : 'no') + '\n' +
@@ -1022,6 +1085,7 @@
 
       function goHome() {
         isPenTracking = false;
+        clearPenFeedWatch();
         pendingHandImage = null;
         resetSmoothingState();
         setPenOverlayActive(false);
@@ -1052,6 +1116,7 @@
 
       function resetPlacement() {
         isPenTracking = false;
+        clearPenFeedWatch();
         inkTrail = [];
         nextWaypointIdx = 0;
         letterComplete = false;
@@ -1152,7 +1217,8 @@
             hint.style.display = 'block';
             applySettings();
             // Do not call getUserMedia here — it conflicts with the active WebXR AR
-            // session on single-camera devices. Pen tracking needs WebXR camera-access.
+            // session on single-camera devices. Pen tracing needs optional camera-access.
+            startPenFeedWatch();
             if (placeHintTimeout) clearTimeout(placeHintTimeout);
             placeHintTimeout = setTimeout(function () {
               if (!letterComplete) hint.style.display = 'none';
@@ -1185,6 +1251,7 @@
             }
             if (imageSource && feedSource) {
               lastHandFeedSource = feedSource;
+              clearPenFeedWatch();
               pendingHandImage = null;
               try {
                 await hands.send({ image: imageSource });
