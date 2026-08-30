@@ -489,11 +489,54 @@
         }
       }
 
+      // #region agent log
+      function agentLog(hypothesisId, location, message, data) {
+        var payload = {
+          sessionId: 'afe16d',
+          runId: 'pre-fix',
+          hypothesisId: hypothesisId,
+          location: location,
+          message: message,
+          data: data || {},
+          timestamp: Date.now()
+        };
+        if (!window.__agentLogs) window.__agentLogs = [];
+        window.__agentLogs.push(payload);
+        if (window.__agentLogs.length > 80) window.__agentLogs.shift();
+        try {
+          console.log('[agent]', hypothesisId, location, message, JSON.stringify(data || {}));
+        } catch (e) {}
+        if (debugPanelEl) {
+          debugPanelEl.style.display = 'block';
+          var tail = window.__agentLogs.slice(-12).map(function (e) {
+            return e.hypothesisId + '|' + e.location + ':' + e.message + ' ' + JSON.stringify(e.data);
+          }).join('\n');
+          debugPanelEl.textContent = 'debug agent (afe16d)\n' + tail;
+        }
+        var body = JSON.stringify(payload);
+        var headers = { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'afe16d' };
+        ['http://127.0.0.1:7403/ingest/35b3cd74-62cd-4b46-8ca6-542a02d05cfe',
+         'http://192.168.18.236:7403/ingest/35b3cd74-62cd-4b46-8ca6-542a02d05cfe'].forEach(function (url) {
+          fetch(url, { method: 'POST', headers: headers, body: body, mode: 'cors' }).catch(function () {});
+        });
+      }
+      let __visSampleCount = 0;
+      let __captureAttemptCount = 0;
+      // #endregion
+
       function setLetterAnchorVisible(visible) {
         const anchor = document.querySelector('#letter-anchor');
         if (!anchor) return;
         const next = !!visible;
         const prev = isAFrameVisible(anchor);
+        // #region agent log
+        agentLog('B', 'setLetterAnchorVisible', 'visibility set', {
+          prev: prev,
+          next: next,
+          attrBefore: anchor.getAttribute('visible'),
+          obj3dBefore: !!(anchor.object3D && anchor.object3D.visible)
+        });
+        // #endregion
         anchor.setAttribute('visible', next);
         if (prev !== next) {
           logDebugOnce(
@@ -522,6 +565,9 @@
         xrCameraFeedDisabled = true;
         xrCameraFeedDisableReason = reason || 'unknown';
         lastGetCameraImageStatus = xrCameraFeedDisableReason;
+        // #region agent log
+        agentLog('D', 'disableXrCameraFeed', 'feed disabled', { reason: xrCameraFeedDisableReason });
+        // #endregion
         logDebugOnce('getCameraImage-final', 'getCameraImage: ' + xrCameraFeedDisableReason + ' (capture disabled)');
       }
 
@@ -936,6 +982,15 @@
           const s = BASE_SCALE * currentZoom;
           letterEl.setAttribute('scale', s + ' ' + s + ' 1');
           letterEl.setAttribute('material', 'shader: flat; transparent: true; opacity: ' + currentOpacity);
+          // #region agent log
+          const hit = document.querySelector('a-scene') && document.querySelector('a-scene').components['ar-hit-test'];
+          agentLog('A', 'applySettings', 'material/scale updated', {
+            scale: s,
+            opacity: currentOpacity,
+            hitBboxNeedsUpdate: hit ? !!hit.bboxNeedsUpdate : null,
+            hitEnabled: hit ? hit.data.enabled : null
+          });
+          // #endregion
         }
       }
 
@@ -1289,9 +1344,33 @@
           });
 
           window.__penFeedTick = function (sceneEl) {
-            if (!isPenTracking || !sceneEl.is('ar-mode') || xrCameraFeedDisabled) return;
+            if (!isPenTracking || !sceneEl.is('ar-mode') || xrCameraFeedDisabled) {
+              // #region agent log
+              if (isPenTracking && (++__captureAttemptCount % 30 === 1)) {
+                agentLog('E', '__penFeedTick', 'tick skipped', {
+                  isPenTracking: isPenTracking,
+                  arMode: sceneEl.is('ar-mode'),
+                  disabled: xrCameraFeedDisabled,
+                  reason: xrCameraFeedDisableReason,
+                  status: lastGetCameraImageStatus
+                });
+              }
+              // #endregion
+              return;
+            }
             try {
               pendingHandImage = xrCameraFeed.capture(sceneEl);
+              // #region agent log
+              if (++__captureAttemptCount <= 8 || __captureAttemptCount % 25 === 0) {
+                agentLog('D', '__penFeedTick', 'capture result', {
+                  n: __captureAttemptCount,
+                  gotImage: !!pendingHandImage,
+                  status: lastGetCameraImageStatus,
+                  disabled: xrCameraFeedDisabled,
+                  feedSource: lastHandFeedSource
+                });
+              }
+              // #endregion
             } catch (e) {
               disableXrCameraFeed('threw: ' + (e && e.message ? e.message : String(e)));
               pendingHandImage = null;
@@ -1311,6 +1390,12 @@
           });
 
           scene.addEventListener('ar-hit-test-select', () => {
+            // #region agent log
+            agentLog('B', 'ar-hit-test-select', 'place begin', {
+              isPenTrackingBefore: isPenTracking,
+              disabled: xrCameraFeedDisabled
+            });
+            // #endregion
             // Placement must succeed independently of pen/camera-access.
             setLetterAnchorVisible(true);
             applySettings();
@@ -1318,6 +1403,37 @@
             bindLetterTextureLoadLogging(letterEl);
             hint.textContent = traceHintText();
             hint.style.display = 'block';
+
+            // #region agent log
+            __visSampleCount = 0;
+            let __visFrame = 0;
+            (function sampleLetterVisibility() {
+              __visFrame++;
+              if (__visFrame % 5 !== 0) {
+                if (__visSampleCount < 16) requestAnimationFrame(sampleLetterVisibility);
+                return;
+              }
+              const anchor = document.querySelector('#letter-anchor');
+              const letter = document.querySelector('#urdu-letter');
+              const hit = scene.components['ar-hit-test'];
+              if (!anchor) return;
+              agentLog('B', 'vis-sample', 'letter visibility sample', {
+                i: __visSampleCount,
+                frame: __visFrame,
+                attr: anchor.getAttribute('visible'),
+                anchorObj: !!(anchor.object3D && anchor.object3D.visible),
+                letterObj: !!(letter && letter.object3D && letter.object3D.visible),
+                letterAttr: letter ? letter.getAttribute('visible') : null,
+                hitTestNull: hit ? hit.hitTest == null : null,
+                bboxMeshVisible: hit && hit.bboxMesh ? !!hit.bboxMesh.visible : null,
+                bboxNeedsUpdate: hit ? !!hit.bboxNeedsUpdate : null,
+                canvasOverlay: canvasEl ? canvasEl.classList.contains('pen-overlay-active') : false,
+                canvasDisplay: canvasEl ? canvasEl.style.display : null
+              });
+              __visSampleCount++;
+              if (__visSampleCount < 16) requestAnimationFrame(sampleLetterVisibility);
+            })();
+            // #endregion
 
             // Pen feed starts after a frame so letter mesh can settle first.
             requestAnimationFrame(function () {
@@ -1328,6 +1444,13 @@
               resetSmoothingState();
               setPenOverlayActive(true);
               startPenFeedWatch();
+              // #region agent log
+              agentLog('E', 'pen-start-raf', 'pen tracking enabled', {
+                isPenTracking: isPenTracking,
+                overlay: canvasEl && canvasEl.classList.contains('pen-overlay-active'),
+                disabled: xrCameraFeedDisabled
+              });
+              // #endregion
             });
 
             if (placeHintTimeout) clearTimeout(placeHintTimeout);
