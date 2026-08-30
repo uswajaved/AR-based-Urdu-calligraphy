@@ -6,9 +6,35 @@
   const onceMessages = [];
   let recentCaptureLines = [];
   const MAX_CAPTURE_LINES = 6;
+  const letterOpCounts = Object.create(null);
+  let projectionDebugLines = [];
 
   function initDebugPanel() {
     panelEl = document.getElementById('pen-debug-panel');
+  }
+
+  /** Log first call per site; log again at ×2, ×10, ×100 to catch loops. */
+  function logLetterOp(site, detail) {
+    letterOpCounts[site] = (letterOpCounts[site] || 0) + 1;
+    const n = letterOpCounts[site];
+    const msg = '[letter] ' + site + ': ' + detail + (n > 1 ? ' (×' + n + ')' : '');
+    if (n === 1) {
+      logOnce('letter-op-' + site, msg);
+    } else if (n === 2 || n === 10 || n === 50 || n === 100) {
+      logOnce('letter-op-repeat-' + site + '-' + n, msg);
+    }
+    console.log('[AR letter]', site, detail, 'count=' + n);
+  }
+
+  function logProjectionDebug(lines) {
+    if (!DEBUG) return;
+    projectionDebugLines = lines;
+  }
+
+  function letterOpSummary() {
+    return Object.keys(letterOpCounts)
+      .map(function (k) { return k + '=' + letterOpCounts[k]; })
+      .join(' ');
   }
 
   function clearOnceKey(key) {
@@ -48,12 +74,19 @@
       'xrFeedDisabled: ' + (extras.xrFeedDisabled ? 'yes' : 'no') + '\n' +
       'hand: ' + (state.handDetected ? 'yes' : 'no') + '\n' +
       'pen: ' + (state.penX != null ? state.penX.toFixed(3) + ', ' + state.penY.toFixed(3) : 'n/a') + '\n' +
+      (state.rawTipX != null
+        ? 'rawTip: ' + state.rawTipX.toFixed(3) + ', ' + state.rawTipY.toFixed(3) +
+          ' ext: ' + state.rawPenX.toFixed(3) + ', ' + state.rawPenY.toFixed(3) +
+          ' mirX: ' + state.mirrorTipX.toFixed(3) + '\n'
+        : '') +
       'onPath: ' + (state.isOnPath ? 'yes' : 'no') + '\n' +
       'dist: ' + (state.minDist != null ? state.minDist.toFixed(3) : 'n/a') + '\n' +
       'waypoint: ' + state.nextWaypoint + '/' + state.pathLength + '\n' +
       'projectedPts: ' + state.projectedPts + '\n' +
       'zoom: ' + (extras.zoom != null ? Number(extras.zoom).toFixed(1) : 'n/a') + '\n' +
       'defaultPath: ' + (extras.defaultPath ? 'yes' : 'no') +
+      (extras.letterOps ? '\nletterOps: ' + extras.letterOps : '') +
+      (projectionDebugLines.length ? '\n--- proj ---\n' + projectionDebugLines.join('\n') : '') +
       (recentCaptureLines.length ? '\n---\n' + recentCaptureLines.join('\n') : '') +
       (onceMessages.length ? '\n---\n' + onceMessages.join('\n') : '');
   }
@@ -63,6 +96,9 @@
     init: initDebugPanel,
     logOnce: logOnce,
     clearOnceKey: clearOnceKey,
+    logLetterOp: logLetterOp,
+    logProjectionDebug: logProjectionDebug,
+    letterOpSummary: letterOpSummary,
     updatePenDebugPanel: updatePenDebugPanel,
     logCaptureAttempt: logCaptureAttempt,
     get panelEl() { return panelEl; }

@@ -45,6 +45,82 @@
   let nextWaypointIdx = 0;
   let letterComplete = false;
 
+  function drawDebugMarker(normX, normY, color, label, radius) {
+    if (!global.ARDebug || !global.ARDebug.DEBUG || !ctx || !canvasEl) return;
+    const x = normX * canvasEl.width;
+    const y = normY * canvasEl.height;
+    ctx.beginPath();
+    ctx.arc(x, y, radius || 10, 0, 2 * Math.PI);
+    ctx.fillStyle = color;
+    ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = '#fff';
+    ctx.stroke();
+    if (label) {
+      ctx.font = 'bold 11px monospace';
+      ctx.fillStyle = color;
+      ctx.strokeStyle = '#000';
+      ctx.lineWidth = 3;
+      ctx.strokeText(label, x + 12, y - 8);
+      ctx.fillText(label, x + 12, y - 8);
+    }
+  }
+
+  /** Map image-normalized coords to where they appear after CSS stretch (client pixels). */
+  function imageNormToClientPx(nx, ny) {
+    if (!canvasEl) return null;
+    const cw = canvasEl.clientWidth;
+    const ch = canvasEl.clientHeight;
+    return { x: nx * cw, y: ny * ch };
+  }
+
+  /** object-fit:cover mapping — image norm → buffer px if canvas were cover-fit. */
+  function imageNormToCoverBufferPx(nx, ny) {
+    if (!canvasEl) return null;
+    const iw = canvasEl.width;
+    const ih = canvasEl.height;
+    const cw = canvasEl.clientWidth;
+    const ch = canvasEl.clientHeight;
+    if (!iw || !ih || !cw || !ch) return null;
+    const imageAspect = iw / ih;
+    const displayAspect = cw / ch;
+    let scale, offsetX, offsetY;
+    if (imageAspect > displayAspect) {
+      scale = ch / ih;
+      offsetX = (cw - iw * scale) / 2;
+      offsetY = 0;
+    } else {
+      scale = cw / iw;
+      offsetX = 0;
+      offsetY = (ch - ih * scale) / 2;
+    }
+    const clientX = offsetX + nx * iw * scale;
+    const clientY = offsetY + ny * ih * scale;
+    // buffer px (linear map from client box to buffer)
+    return {
+      x: (clientX / cw) * iw,
+      y: (clientY / ch) * ih,
+      clientX: clientX,
+      clientY: clientY
+    };
+  }
+
+  function drawDebugMarkerBufferPx(px, py, color, label) {
+    if (!global.ARDebug || !global.ARDebug.DEBUG || !ctx || !canvasEl) return;
+    ctx.beginPath();
+    ctx.arc(px, py, 9, 0, 2 * Math.PI);
+    ctx.fillStyle = color;
+    ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = '#000';
+    ctx.stroke();
+    if (label) {
+      ctx.font = '10px monospace';
+      ctx.fillStyle = color;
+      ctx.fillText(label, px + 10, py + 4);
+    }
+  }
+
   function resetSmoothingState() {
     smoothedPenX = null;
     smoothedPenY = null;
@@ -381,6 +457,30 @@
     letterObj.updateWorldMatrix(true, false);
     const imageSize = getTrackingImageSize();
     const projected = [];
+
+    if (global.ARDebug && global.ARDebug.DEBUG && global.ARDebug.logProjectionDebug) {
+      const xrCam = sceneEl.renderer.xr && sceneEl.renderer.xr.getCamera
+        ? sceneEl.renderer.xr.getCamera()
+        : null;
+      const lines = [
+        'proj: MediaPipe callback (not A-Frame tick)',
+        'afCanvas: ' + cw + '×' + ch + ' buffer=' + afCanvas.width + '×' + afCanvas.height,
+        'trackCanvas: ' + (canvasEl ? canvasEl.clientWidth + '×' + canvasEl.clientHeight : 'n/a') +
+          ' buffer=' + (canvasEl ? canvasEl.width + '×' + canvasEl.height : 'n/a'),
+        'image: ' + (imageSize ? imageSize.w + '×' + imageSize.h : 'n/a'),
+        'cam: scene.camera' + (xrCam ? ' xrCam=' + (xrCam === threeCam ? 'same' : 'DIFFERENT') : ''),
+        'ar-mode: ' + (sceneEl.is('ar-mode') ? 'yes' : 'no')
+      ];
+      if (imageSize && canvasEl) {
+        lines.push(
+          'aspect image=' + (imageSize.w / imageSize.h).toFixed(3) +
+          ' client=' + (canvasEl.clientWidth / canvasEl.clientHeight).toFixed(3) +
+          ' buffer=' + (canvasEl.width / canvasEl.height).toFixed(3)
+        );
+      }
+      global.ARDebug.logProjectionDebug(lines);
+    }
+
     for (let i = 0; i < pathUV.length; i++) {
       const uv = pathUV[i];
       const world = letterUVToLocal(uv.x, uv.y).applyMatrix4(letterObj.matrixWorld);
@@ -397,6 +497,30 @@
       if (videoNorm) projected.push(videoNorm);
     }
     return projected;
+  }
+
+  /** Debug: project one UV through full pipeline; returns intermediates. */
+  function projectUVDebug(uv) {
+    const letterEl = document.querySelector('#urdu-letter');
+    const sceneEl = document.querySelector('a-scene');
+    if (!letterEl || !sceneEl || !sceneEl.camera || !sceneEl.renderer) return null;
+    const threeCam = sceneEl.camera;
+    const letterObj = letterEl.object3D;
+    const afCanvas = sceneEl.renderer.domElement;
+    const cw = afCanvas.clientWidth;
+    const ch = afCanvas.clientHeight;
+    const imageSize = getTrackingImageSize();
+    letterObj.updateWorldMatrix(true, false);
+    const world = letterUVToLocal(uv.x, uv.y).applyMatrix4(letterObj.matrixWorld);
+    const ndc = world.clone().project(threeCam);
+    const vx = (ndc.x + 1) / 2;
+    const vy = (-ndc.y + 1) / 2;
+    const videoNorm = viewportNormToVideoNorm(
+      vx, vy, cw, ch,
+      imageSize ? imageSize.w : 0,
+      imageSize ? imageSize.h : 0
+    );
+    return { ndc: ndc, viewportNorm: { x: vx, y: vy }, videoNorm: videoNorm };
   }
 
   function drawProjectedPath(path, strokeStyle) {
@@ -448,6 +572,21 @@
       );
     }
 
+    // ?debug=1: letter-center projection markers (guide-line drift)
+    if (isPenTracking && global.ARDebug && global.ARDebug.DEBUG) {
+      const center = projectUVDebug({ x: 0.5, y: 0.5 });
+      if (center && center.videoNorm) {
+        drawDebugMarker(center.videoNorm.x, center.videoNorm.y, 'rgba(255, 0, 255, 0.95)', 'ctr', 12);
+        if (center.viewportNorm) {
+          drawDebugMarker(center.viewportNorm.x, center.viewportNorm.y, 'rgba(255, 255, 0, 0.8)', 'ndc', 8);
+        }
+        const coverPx = imageNormToCoverBufferPx(center.videoNorm.x, center.videoNorm.y);
+        if (coverPx) {
+          drawDebugMarkerBufferPx(coverPx.x, coverPx.y, 'rgba(0, 255, 255, 0.9)', 'cover');
+        }
+      }
+    }
+
     if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0 && isPenTracking) {
       debugState.handDetected = true;
       const landmarks = results.multiHandLandmarks[0];
@@ -455,17 +594,32 @@
       const indexTip = landmarks[8];
       const dirX = indexTip.x - indexMcp.x;
       const dirY = indexTip.y - indexMcp.y;
-      const pen = smoothPenTip(
-        indexTip.x + dirX * 0.8,
-        indexTip.y + dirY * 0.8
-      );
+      const rawPenX = indexTip.x + dirX * 0.8;
+      const rawPenY = indexTip.y + dirY * 0.8;
+      const pen = smoothPenTip(rawPenX, rawPenY);
       const penTipX = pen.x;
       const penTipY = pen.y;
       debugState.penX = penTipX;
       debugState.penY = penTipY;
+      debugState.rawTipX = indexTip.x;
+      debugState.rawTipY = indexTip.y;
+      debugState.rawPenX = rawPenX;
+      debugState.rawPenY = rawPenY;
+      debugState.mirrorTipX = 1 - indexTip.x;
 
       const x = penTipX * canvasEl.width;
       const y = penTipY * canvasEl.height;
+
+      // ?debug=1: pen-tip stage markers (fixed offset diagnosis)
+      if (global.ARDebug && global.ARDebug.DEBUG) {
+        drawDebugMarker(indexTip.x, indexTip.y, 'rgba(255, 255, 0, 0.95)', 'tip', 11);
+        drawDebugMarker(rawPenX, rawPenY, 'rgba(255, 140, 0, 0.95)', 'ext', 9);
+        drawDebugMarker(1 - indexTip.x, indexTip.y, 'rgba(180, 0, 255, 0.85)', 'mir', 9);
+        const coverTip = imageNormToCoverBufferPx(indexTip.x, indexTip.y);
+        if (coverTip) {
+          drawDebugMarkerBufferPx(coverTip.x, coverTip.y, 'rgba(255, 255, 255, 0.9)', 'tipC');
+        }
+      }
 
       ctx.beginPath();
       ctx.moveTo(indexTip.x * canvasEl.width, indexTip.y * canvasEl.height);
@@ -512,6 +666,11 @@
       ctx.lineWidth = 3;
       ctx.strokeStyle = '#fff';
       ctx.stroke();
+      if (global.ARDebug && global.ARDebug.DEBUG) {
+        ctx.font = '10px monospace';
+        ctx.fillStyle = '#fff';
+        ctx.fillText('pen', x + 14, y + 4);
+      }
 
       if (!letterComplete && activePath.length > 0 && nextWaypointIdx >= activePath.length) {
         letterComplete = true;
@@ -532,7 +691,8 @@
         consecutiveFails: consecutiveCaptureFails,
         xrFeedDisabled: xrCameraFeedDisabled,
         zoom: global.ARPlacement ? global.ARPlacement.currentZoom : 1,
-        defaultPath: pathIsDefault
+        defaultPath: pathIsDefault,
+        letterOps: global.ARDebug.letterOpSummary ? global.ARDebug.letterOpSummary() : ''
       });
     }
   }

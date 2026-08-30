@@ -61,8 +61,15 @@
     const letterEl = document.querySelector('#urdu-letter');
     if (!letterEl) return;
     const prev = letterEl.getAttribute('src');
-    if (prev === filename || prev === '#' + filename.replace(/\./g, '')) {
-      /* still set if path differs from asset id */
+    const assetId = '#' + filename.replace(/\.svg$/i, '').replace(/\./g, '');
+    if (prev === filename || prev === assetId) {
+      if (global.ARDebug && global.ARDebug.logLetterOp) {
+        global.ARDebug.logLetterOp('setLetterSrc.skip', 'unchanged src=' + prev);
+      }
+      return;
+    }
+    if (global.ARDebug && global.ARDebug.logLetterOp) {
+      global.ARDebug.logLetterOp('setLetterSrc', filename + ' (was ' + prev + ')');
     }
     if (global.ARDebug) {
       global.ARDebug.logOnce(

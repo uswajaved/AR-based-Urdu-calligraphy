@@ -5,6 +5,12 @@
   let currentOpacity = 0.5;
   let placeHintTimeout = null;
 
+  function logOp(site, detail) {
+    if (global.ARDebug && global.ARDebug.logLetterOp) {
+      global.ARDebug.logLetterOp(site, detail);
+    }
+  }
+
   function isAFrameVisible(el) {
     if (!el) return false;
     const v = el.getAttribute('visible');
@@ -17,6 +23,7 @@
     const next = !!visible;
     const prev = isAFrameVisible(anchor);
     if (prev === next) return; // avoid redundant attribute writes that can re-trigger systems
+    logOp('setLetterAnchorVisible', 'visible=' + next + ' (was ' + prev + ')');
     anchor.setAttribute('visible', next);
     if (global.ARDebug) {
       global.ARDebug.logOnce(
@@ -30,6 +37,7 @@
     if (!letterEl || letterEl.__textureLogBound) return;
     letterEl.__textureLogBound = true;
     letterEl.addEventListener('materialtextureloaded', function () {
+      logOp('materialtextureloaded', 'src=' + (letterEl.getAttribute('src') || ''));
       if (global.ARDebug) {
         global.ARDebug.logOnce(
           'letter-tex-ok-' + (letterEl.getAttribute('src') || ''),
@@ -38,6 +46,7 @@
       }
     });
     letterEl.addEventListener('error', function (evt) {
+      logOp('letter-texture-error', 'src=' + (letterEl.getAttribute('src') || ''));
       if (global.ARDebug) {
         global.ARDebug.logOnce(
           'letter-tex-fail-' + (letterEl.getAttribute('src') || ''),
@@ -51,15 +60,16 @@
     const letterEl = document.querySelector('#urdu-letter');
     if (!letterEl) return;
     const s = BASE_SCALE * currentZoom;
-    // Only update scale / opacity — avoid rewriting full material string every call
-    // (full material rewrite reloads texture and causes blink).
+    logOp('applySettings', 'scale=' + s + ' opacity=' + currentOpacity);
     letterEl.setAttribute('scale', s + ' ' + s + ' 1');
     const mesh = letterEl.getObject3D('mesh');
     if (mesh && mesh.material) {
       mesh.material.opacity = currentOpacity;
       mesh.material.transparent = true;
       mesh.material.needsUpdate = true;
+      logOp('applySettings.material', 'needsUpdate=true opacity=' + currentOpacity);
     } else {
+      logOp('applySettings.materialAttr', 'full material string fallback');
       letterEl.setAttribute(
         'material',
         'shader: flat; transparent: true; opacity: ' + currentOpacity
@@ -96,6 +106,7 @@
     if (scene) {
       try {
         scene.setAttribute('ar-hit-test', 'enabled', true);
+        logOp('resetPlacement.hitTest', 'enabled=true');
         if (global.ARPen) global.ARPen.resetCameraFeedSession();
       } catch (e) {}
     }
@@ -170,6 +181,7 @@
     const letterEl = document.querySelector('#urdu-letter');
     if (letterEl) {
       const s = BASE_SCALE * currentZoom;
+      logOp('onLetterPlaced.scale', 'scale=' + s);
       letterEl.setAttribute('scale', s + ' ' + s + ' 1');
       bindLetterTextureLoadLogging(letterEl);
     }
@@ -183,9 +195,7 @@
     // Stop hit-test/reticle from continuing to update after placement.
     try {
       scene.setAttribute('ar-hit-test', 'enabled', false);
-      if (global.ARDebug) {
-        global.ARDebug.logOnce('hit-test-off', 'ar-hit-test enabled → false after place');
-      }
+      logOp('onLetterPlaced.hitTest', 'enabled=false');
     } catch (e) {}
 
     // Start pen tracking (fail-soft lives in ARPen).
@@ -216,8 +226,8 @@
       // Dummy mesh: show once for Chrome multi-texture workaround; do not toggle every frame.
       const dummy = document.querySelector('#cam-access-dummy');
       if (dummy && !isAFrameVisible(dummy)) {
+        logOp('enter-vr.dummy', 'cam-access-dummy visible=true');
         dummy.setAttribute('visible', true);
-        if (global.ARDebug) global.ARDebug.logOnce('dummy-on', 'cam-access-dummy visible → true');
       }
     });
 
@@ -229,8 +239,8 @@
       }
       const dummy = document.querySelector('#cam-access-dummy');
       if (dummy && isAFrameVisible(dummy)) {
+        logOp('exit-vr.dummy', 'cam-access-dummy visible=false');
         dummy.setAttribute('visible', false);
-        if (global.ARDebug) global.ARDebug.logOnce('dummy-off', 'cam-access-dummy visible → false');
       }
     });
 
@@ -253,9 +263,30 @@
     });
   }
 
+  function installLetterMutationWatcher() {
+    if (!global.ARDebug || !global.ARDebug.DEBUG) return;
+    ['#letter-anchor', '#urdu-letter'].forEach(function (sel) {
+      const el = document.querySelector(sel);
+      if (!el) return;
+      const obs = new MutationObserver(function (mutations) {
+        mutations.forEach(function (m) {
+          if (m.type !== 'attributes') return;
+          const name = m.attributeName;
+          const val = el.getAttribute(name);
+          logOp('mutationObserver.' + sel, name + '=' + val);
+        });
+      });
+      obs.observe(el, {
+        attributes: true,
+        attributeFilter: ['visible', 'src', 'material', 'scale', 'position', 'rotation']
+      });
+    });
+  }
+
   document.addEventListener('DOMContentLoaded', function () {
     if (global.ARDebug) global.ARDebug.init();
     wireScene();
+    installLetterMutationWatcher();
   });
 
   global.ARPlacement = {
