@@ -45,6 +45,13 @@
       })();
     </script>
     <script src="https://aframe.io/releases/1.8.0/aframe.min.js"></script>
+    <script>
+      AFRAME.registerComponent('xr-pen-feed', {
+        tick: function () {
+          if (window.__penFeedTick) window.__penFeedTick(this.el);
+        }
+      });
+    </script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
     <style>
       body { margin: 0; overflow: hidden; font-family: sans-serif; }
@@ -58,7 +65,10 @@
       #tracking-canvas {
         z-index: 1;
         background: transparent;
-        transform: scaleX(-1);
+        pointer-events: none;
+      }
+      #tracking-canvas.pen-overlay-active {
+        z-index: 3 !important;
       }
 
       a-scene, .a-canvas {
@@ -216,8 +226,9 @@
         - dom-overlay -> lets our HTML nav/modals stay visible during the AR session
     -->
     <a-scene
-      webxr="optionalFeatures: hit-test, local-floor, dom-overlay; overlayElement: #dom-overlay;"
+      webxr="optionalFeatures: hit-test, local-floor, dom-overlay, camera-access; overlayElement: #dom-overlay;"
       ar-hit-test="target: #letter-anchor"
+      xr-pen-feed
       renderer="colorManagement: true; alpha: true; physicallyCorrectLights: true;"
       xr-mode-ui="XRMode: ar"
       loading-screen="enabled: false">
@@ -412,11 +423,24 @@
       const BASE_SCALE = 0.3;
       const DEBUG_PEN_TRACKING = new URLSearchParams(location.search).has('debug');
       const PATH_HIT_THRESHOLD = 0.08;
+      // EMA smoothing for raw pen tip (0–1). Higher = snappier, lower = smoother.
+      const PEN_SMOOTHING_ALPHA = 0.4;
+      // EMA for projected guide path points; dampens phone-shake jitter on the overlay.
+      const PATH_SMOOTHING_ALPHA = 0.3;
+      // Reject single-frame path jumps larger than this (normalized coords) as shake outliers.
+      const PATH_OUTLIER_THRESHOLD = 0.14;
 
       let currentLetterFilename = 'Be.svg';
       let currentTargetPathUV = [];
       let currentPathIsDefault = false;
       let projectedScreenPath = [];
+      let smoothedProjectedPath = [];
+      let smoothedPenX = null;
+      let smoothedPenY = null;
+      let pendingHandImage = null;
+      let lastHandFeedSource = 'none';
+      let trackingImageW = 0;
+      let trackingImageH = 0;
       let videoStream = null;
       let hands = null;
       let isPenTracking = false;
@@ -463,6 +487,158 @@
         { x: 0.5, y: 0.8 }
       ];
 
+      function resetSmoothingState() {
+        smoothedPenX = null;
+        smoothedPenY = null;
+        smoothedProjectedPath = [];
+      }
+
+      function smoothPenTip(rawX, rawY) {
+        if (smoothedPenX == null || smoothedPenY == null) {
+          smoothedPenX = rawX;
+          smoothedPenY = rawY;
+        } else {
+          smoothedPenX = PEN_SMOOTHING_ALPHA * rawX + (1 - PEN_SMOOTHING_ALPHA) * smoothedPenX;
+          smoothedPenY = PEN_SMOOTHING_ALPHA * rawY + (1 - PEN_SMOOTHING_ALPHA) * smoothedPenY;
+        }
+        return { x: smoothedPenX, y: smoothedPenY };
+      }
+
+      function smoothProjectedPath(rawPath) {
+        if (!rawPath.length) {
+          smoothedProjectedPath = [];
+          return smoothedProjectedPath;
+        }
+        if (smoothedProjectedPath.length !== rawPath.length) {
+          smoothedProjectedPath = rawPath.map(function (p) { return { x: p.x, y: p.y }; });
+          return smoothedProjectedPath;
+        }
+        for (let i = 0; i < rawPath.length; i++) {
+          const raw = rawPath[i];
+          const prev = smoothedProjectedPath[i];
+          const jump = Math.hypot(raw.x - prev.x, raw.y - prev.y);
+          if (jump > PATH_OUTLIER_THRESHOLD) continue;
+          prev.x = PATH_SMOOTHING_ALPHA * raw.x + (1 - PATH_SMOOTHING_ALPHA) * prev.x;
+          prev.y = PATH_SMOOTHING_ALPHA * raw.y + (1 - PATH_SMOOTHING_ALPHA) * prev.y;
+        }
+        return smoothedProjectedPath;
+      }
+
+      // WebXR camera-access → 2D canvas for MediaPipe (getUserMedia unavailable during AR).
+      const xrCameraFeed = (function () {
+        let binding = null;
+        let readbackFb = null;
+        let feedCanvas = null;
+        let feedCtx = null;
+        let readbackPixels = null;
+        let boundSession = null;
+
+        function capture(scene) {
+          if (!scene || !scene.renderer || !scene.frame || !window.XRWebGLBinding) return null;
+          const renderer = scene.renderer;
+          const session = renderer.xr.getSession();
+          const frame = scene.frame;
+          if (!session) return null;
+
+          if (boundSession !== session) {
+            binding = null;
+            readbackFb = null;
+            boundSession = session;
+          }
+
+          const gl = renderer.getContext();
+          if (!binding) binding = new XRWebGLBinding(session, gl);
+
+          const refSpace = renderer.xr.getReferenceSpace();
+          const pose = frame.getViewerPose(refSpace);
+          if (!pose || !pose.views.length) return null;
+
+          let cameraView = null;
+          for (let i = 0; i < pose.views.length; i++) {
+            if (pose.views[i].camera) {
+              cameraView = pose.views[i];
+              break;
+            }
+          }
+          if (!cameraView) return null;
+
+          const cam = cameraView.camera;
+          const w = cam.width;
+          const h = cam.height;
+          if (!w || !h) return null;
+
+          const texture = binding.getCameraImage(cam);
+          if (!texture) return null;
+
+          if (!readbackFb) readbackFb = gl.createFramebuffer();
+          gl.bindFramebuffer(gl.FRAMEBUFFER, readbackFb);
+          gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
+          if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
+            gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+            return null;
+          }
+
+          const byteLen = w * h * 4;
+          if (!readbackPixels || readbackPixels.length !== byteLen) {
+            readbackPixels = new Uint8ClampedArray(byteLen);
+          }
+          gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, readbackPixels);
+          gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+
+          if (!feedCanvas) {
+            feedCanvas = document.createElement('canvas');
+            feedCtx = feedCanvas.getContext('2d', { willReadFrequently: true });
+          }
+          if (feedCanvas.width !== w || feedCanvas.height !== h) {
+            feedCanvas.width = w;
+            feedCanvas.height = h;
+          }
+
+          const imageData = feedCtx.createImageData(w, h);
+          const rowBytes = w * 4;
+          for (let y = 0; y < h; y++) {
+            const srcStart = (h - 1 - y) * rowBytes;
+            imageData.data.set(readbackPixels.subarray(srcStart, srcStart + rowBytes), y * rowBytes);
+          }
+          feedCtx.putImageData(imageData, 0, 0);
+          trackingImageW = w;
+          trackingImageH = h;
+          return feedCanvas;
+        }
+
+        return {
+          capture: capture,
+          getSize: function () {
+            return trackingImageW && trackingImageH
+              ? { w: trackingImageW, h: trackingImageH }
+              : null;
+          }
+        };
+      })();
+
+      function getTrackingImageSize() {
+        const scene = document.querySelector('a-scene');
+        if (scene && scene.is('ar-mode')) {
+          const xrSize = xrCameraFeed.getSize();
+          if (xrSize) return xrSize;
+        }
+        if (videoEl && videoEl.videoWidth > 0) {
+          return { w: videoEl.videoWidth, h: videoEl.videoHeight };
+        }
+        if (canvasEl && canvasEl.width > 0) {
+          return { w: canvasEl.width, h: canvasEl.height };
+        }
+        return null;
+      }
+
+      function syncTrackingCanvasSize() {
+        const size = getTrackingImageSize();
+        if (!size || !canvasEl) return;
+        if (canvasEl.width !== size.w || canvasEl.height !== size.h) {
+          canvasEl.width = size.w;
+          canvasEl.height = size.h;
+        }
+      }
       function getLetterPathUV(filename) {
         return letterPaths[filename] || DEFAULT_LETTER_PATH;
       }
@@ -498,9 +674,10 @@
         return new THREE.Vector3(u - 0.5, 0.5 - v, 0);
       }
 
-      function viewportNormToVideoNorm(vx, vy, viewportW, viewportH) {
-        const iw = canvasEl ? canvasEl.width : 0;
-        const ih = canvasEl ? canvasEl.height : 0;
+      function viewportNormToVideoNorm(vx, vy, viewportW, viewportH, imageW, imageH) {
+        const size = getTrackingImageSize();
+        const iw = imageW || (size ? size.w : 0) || (canvasEl ? canvasEl.width : 0);
+        const ih = imageH || (size ? size.h : 0) || (canvasEl ? canvasEl.height : 0);
         if (!iw || !ih || !viewportW || !viewportH) return null;
         const imageAspect = iw / ih;
         const containerAspect = viewportW / viewportH;
@@ -524,12 +701,11 @@
       function projectLetterPathToVideoNorm(pathUV) {
         const anchorEl = document.querySelector('#letter-anchor');
         const letterEl = document.querySelector('#urdu-letter');
-        const cameraEl = document.querySelector('[camera]');
         const sceneEl = document.querySelector('a-scene');
-        if (!anchorEl || !isAFrameVisible(anchorEl) || !letterEl || !cameraEl || !sceneEl || !sceneEl.renderer) {
+        if (!anchorEl || !isAFrameVisible(anchorEl) || !letterEl || !sceneEl || !sceneEl.renderer || !sceneEl.camera) {
           return [];
         }
-        const threeCam = cameraEl.getObject3D('camera');
+        const threeCam = sceneEl.camera;
         const letterObj = letterEl.object3D;
         const afCanvas = sceneEl.renderer.domElement;
         const cw = afCanvas.clientWidth;
@@ -537,6 +713,7 @@
         if (!cw || !ch || !pathUV.length) return [];
 
         letterObj.updateWorldMatrix(true, false);
+        const imageSize = getTrackingImageSize();
         const projected = [];
         for (let i = 0; i < pathUV.length; i++) {
           const uv = pathUV[i];
@@ -547,7 +724,14 @@
             x: (ndc.x + 1) / 2,
             y: (-ndc.y + 1) / 2
           };
-          const videoNorm = viewportNormToVideoNorm(viewport.x, viewport.y, cw, ch);
+          const videoNorm = viewportNormToVideoNorm(
+            viewport.x,
+            viewport.y,
+            cw,
+            ch,
+            imageSize ? imageSize.w : 0,
+            imageSize ? imageSize.h : 0
+          );
           if (videoNorm) projected.push(videoNorm);
         }
         return projected;
@@ -558,9 +742,11 @@
         currentTargetPathUV = getLetterPathUV(filename);
         currentPathIsDefault = !letterPaths[filename];
         projectedScreenPath = [];
+        smoothedProjectedPath = [];
         inkTrail = [];
         nextWaypointIdx = 0;
         letterComplete = false;
+        resetSmoothingState();
       }
 
       function traceHintText() {
@@ -576,6 +762,7 @@
         debugPanelEl.textContent =
           'debug=1\n' +
           'penTracking: ' + (isPenTracking ? 'on' : 'off') + '\n' +
+          'feed: ' + (state.feedSource || 'none') + '\n' +
           'hand: ' + (state.handDetected ? 'yes' : 'no') + '\n' +
           'pen: ' + (state.penX != null ? state.penX.toFixed(3) + ', ' + state.penY.toFixed(3) : 'n/a') + '\n' +
           'onPath: ' + (state.isOnPath ? 'yes' : 'no') + '\n' +
@@ -648,22 +835,23 @@
       }
 
       function onHandResults(results) {
-        if (videoEl.videoWidth > 0 && canvasEl.width !== videoEl.videoWidth) {
-          canvasEl.width = videoEl.videoWidth;
-          canvasEl.height = videoEl.videoHeight;
-        }
+        syncTrackingCanvasSize();
 
         ctx.clearRect(0, 0, canvasEl.width, canvasEl.height);
 
+        let rawProjectedPath = [];
         if (isPenTracking) {
-          projectedScreenPath = projectLetterPathToVideoNorm(currentTargetPathUV);
+          rawProjectedPath = projectLetterPathToVideoNorm(currentTargetPathUV);
+          projectedScreenPath = smoothProjectedPath(rawProjectedPath);
         } else {
           projectedScreenPath = [];
+          smoothedProjectedPath = [];
         }
 
         const activePath = projectedScreenPath;
         const hitThreshold = PATH_HIT_THRESHOLD;
         const debugState = {
+          feedSource: lastHandFeedSource,
           handDetected: false,
           penX: null,
           penY: null,
@@ -689,8 +877,11 @@
           const dirX = indexTip.x - indexMcp.x;
           const dirY = indexTip.y - indexMcp.y;
           const PEN_LENGTH_FACTOR = 0.8;
-          const penTipX = indexTip.x + (dirX * PEN_LENGTH_FACTOR);
-          const penTipY = indexTip.y + (dirY * PEN_LENGTH_FACTOR);
+          const rawPenX = indexTip.x + (dirX * PEN_LENGTH_FACTOR);
+          const rawPenY = indexTip.y + (dirY * PEN_LENGTH_FACTOR);
+          const pen = smoothPenTip(rawPenX, rawPenY);
+          const penTipX = pen.x;
+          const penTipY = pen.y;
 
           debugState.penX = penTipX;
           debugState.penY = penTipY;
@@ -831,6 +1022,9 @@
 
       function goHome() {
         isPenTracking = false;
+        pendingHandImage = null;
+        resetSmoothingState();
+        setPenOverlayActive(false);
         document.querySelector('#home-screen').style.display = 'flex';
         document.querySelector('#top-nav').style.display = 'none';
         document.querySelector('#bottom-nav').style.display = 'none';
@@ -861,6 +1055,9 @@
         inkTrail = [];
         nextWaypointIdx = 0;
         letterComplete = false;
+        pendingHandImage = null;
+        resetSmoothingState();
+        setPenOverlayActive(false);
         document.querySelector('#letter-anchor').setAttribute('visible', false);
         resetHitTestPlacement();
         document.getElementById('place-hint').textContent = 'Move your phone to find a surface, then tap to place';
@@ -887,9 +1084,17 @@
         applySettings();
       }
 
+      function setPenOverlayActive(active) {
+        if (canvasEl) {
+          canvasEl.style.display = active ? '' : 'none';
+          canvasEl.classList.toggle('pen-overlay-active', active);
+        }
+      }
+
       function setPassthroughLayersVisible(show) {
         if (videoEl) videoEl.style.display = show ? '' : 'none';
-        if (canvasEl) canvasEl.style.display = show ? '' : 'none';
+        if (!show) setPenOverlayActive(isPenTracking);
+        else setPenOverlayActive(false);
       }
 
       document.addEventListener('DOMContentLoaded', () => {
@@ -906,14 +1111,21 @@
             }
           });
           scene.addEventListener('enter-vr', function () {
-            // WebXR owns the back camera during immersive AR; release getUserMedia
-            // so enterAR / hit-test / letter placement are not blocked or frozen.
             stopCamera();
-            setPassthroughLayersVisible(false);
+            if (videoEl) videoEl.style.display = 'none';
+            if (isPenTracking) setPenOverlayActive(true);
           });
           scene.addEventListener('exit-vr', function () {
             setPassthroughLayersVisible(true);
+            setPenOverlayActive(false);
+            pendingHandImage = null;
+            lastHandFeedSource = 'none';
           });
+
+          window.__penFeedTick = function (sceneEl) {
+            if (!isPenTracking || !sceneEl.is('ar-mode')) return;
+            pendingHandImage = xrCameraFeed.capture(sceneEl);
+          };
 
           const anchor = document.querySelector('#letter-anchor');
           const hint = document.getElementById('place-hint');
@@ -934,6 +1146,8 @@
             inkTrail = [];
             nextWaypointIdx = 0;
             letterComplete = false;
+            resetSmoothingState();
+            setPenOverlayActive(true);
             hint.textContent = traceHintText();
             hint.style.display = 'block';
             applySettings();
@@ -958,11 +1172,26 @@
         hands.onResults(onHandResults);
 
         async function processFrame() {
-          if (isPenTracking && videoEl && videoEl.readyState >= 2) {
-            await hands.send({ image: videoEl });
-          } else {
-            requestAnimationFrame(processFrame);
-            return;
+          if (isPenTracking && hands) {
+            let imageSource = pendingHandImage;
+            let feedSource = null;
+            if (imageSource) {
+              feedSource = 'xr-camera';
+            } else if (videoEl && videoEl.readyState >= 2) {
+              imageSource = videoEl;
+              feedSource = 'getUserMedia';
+              trackingImageW = videoEl.videoWidth;
+              trackingImageH = videoEl.videoHeight;
+            }
+            if (imageSource && feedSource) {
+              lastHandFeedSource = feedSource;
+              pendingHandImage = null;
+              try {
+                await hands.send({ image: imageSource });
+              } catch (err) {
+                console.error('MediaPipe hands.send failed:', err);
+              }
+            }
           }
           requestAnimationFrame(processFrame);
         }
