@@ -61,7 +61,8 @@
     if (!letterEl) return;
     const s = BASE_SCALE * currentZoom;
     logOp('applySettings', 'scale=' + s + ' opacity=' + currentOpacity);
-    letterEl.setAttribute('scale', s + ' ' + s + ' 1');
+    // Keep uniform XYZ scale (matches a-image default); non-uniform Z was unnecessary.
+    letterEl.setAttribute('scale', s + ' ' + s + ' ' + s);
     const mesh = letterEl.getObject3D('mesh');
     if (mesh && mesh.material) {
       mesh.material.opacity = currentOpacity;
@@ -182,7 +183,7 @@
     if (letterEl) {
       const s = BASE_SCALE * currentZoom;
       logOp('onLetterPlaced.scale', 'scale=' + s);
-      letterEl.setAttribute('scale', s + ' ' + s + ' 1');
+      letterEl.setAttribute('scale', s + ' ' + s + ' ' + s);
       bindLetterTextureLoadLogging(letterEl);
     }
 

@@ -45,13 +45,20 @@
   let currentPathIsDefault = false;
 
   function getLetterPathUV(filename) {
-    return letterPaths[filename] || DEFAULT_LETTER_PATH;
+    const path = letterPaths[filename] || DEFAULT_LETTER_PATH;
+    return path.slice();
   }
 
   function resetTraceProgress(filename) {
     currentLetterFilename = filename;
     currentTargetPathUV = getLetterPathUV(filename);
     currentPathIsDefault = !letterPaths[filename];
+    if (global.ARDebug && global.ARDebug.logOnce) {
+      global.ARDebug.logOnce(
+        'path-set-' + filename,
+        'path set: ' + filename + ' uvPts=' + currentTargetPathUV.length
+      );
+    }
     if (global.ARPen && typeof global.ARPen.onTraceReset === 'function') {
       global.ARPen.onTraceReset();
     }

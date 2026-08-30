@@ -58,12 +58,28 @@
     return { w: window.innerWidth, h: window.innerHeight };
   }
 
+  /**
+   * XR getCamera() returns an ArrayCamera (container). Vector3.project(ArrayCamera)
+   * uses the container's matrices — wrong for mono AR and yields skewed/diagonal paths.
+   * Always project with the primary view camera (cameras[0]) or scene.camera.
+   */
   function getActiveCamera(sceneEl) {
-    if (sceneEl && sceneEl.renderer && sceneEl.renderer.xr && sceneEl.is('ar-mode')) {
-      const xrCam = sceneEl.renderer.xr.getCamera && sceneEl.renderer.xr.getCamera();
-      if (xrCam) return xrCam;
+    if (!sceneEl) return null;
+    const renderer = sceneEl.renderer;
+    if (renderer && renderer.xr && sceneEl.is('ar-mode')) {
+      const xrCam = renderer.xr.getCamera && renderer.xr.getCamera();
+      if (xrCam && xrCam.cameras && xrCam.cameras.length) {
+        return xrCam.cameras[0];
+      }
     }
-    return sceneEl ? sceneEl.camera : null;
+    return sceneEl.camera || null;
+  }
+
+  function describeCamera(cam) {
+    if (!cam) return 'null';
+    const name = (cam.constructor && cam.constructor.name) || typeof cam;
+    if (cam.cameras) return name + '(ArrayCamera — BUG if used for project)';
+    return name + (cam.isPerspectiveCamera ? '' : '');
   }
 
   function drawDebugMarker(normX, normY, color, label, radius) {
@@ -264,11 +280,20 @@
         return null;
       }
 
+      // Save GL bindings — attaching XR camera texture without restore corrupts
+      // the letter mesh texture unit (Chrome camera-access flicker).
+      const prevFb = gl.getParameter(gl.FRAMEBUFFER_BINDING);
+      const prevTex = gl.getParameter(gl.TEXTURE_BINDING_2D);
+      const prevActive = gl.getParameter(gl.ACTIVE_TEXTURE);
+
       if (!readbackFb) readbackFb = gl.createFramebuffer();
       gl.bindFramebuffer(gl.FRAMEBUFFER, readbackFb);
       gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
       if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
-        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, null, 0);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, prevFb);
+        if (prevActive != null) gl.activeTexture(prevActive);
+        if (prevTex != null) gl.bindTexture(gl.TEXTURE_2D, prevTex);
         noteCaptureFailure('framebuffer incomplete');
         return null;
       }
@@ -278,7 +303,11 @@
         readbackPixels = new Uint8ClampedArray(byteLen);
       }
       gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, readbackPixels);
-      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      // Detach XR texture from FBO, then restore prior bindings.
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, null, 0);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, prevFb);
+      if (prevActive != null) gl.activeTexture(prevActive);
+      if (prevTex != null) gl.bindTexture(gl.TEXTURE_2D, prevTex);
 
       if (!feedCanvas) {
         feedCanvas = document.createElement('canvas');
@@ -410,11 +439,24 @@
     letterObj.updateWorldMatrix(true, false);
     threeCam.updateMatrixWorld(true);
 
+    if (global.ARDebug && global.ARDebug.DEBUG && global.ARDebug.logProjectionDebug) {
+      const mesh = letterEl.getObject3D('mesh');
+      const params = mesh && mesh.geometry && mesh.geometry.parameters;
+      global.ARDebug.logProjectionDebug([
+        'cam: ' + describeCamera(threeCam),
+        'uvPts: ' + pathUV.length,
+        'letter: ' + (global.ARLetters ? global.ARLetters.currentLetterFilename : '?'),
+        'geom: ' + (params ? params.width.toFixed(3) + '×' + params.height.toFixed(3) : 'fallback 1×1')
+      ]);
+    }
+
     const projected = [];
     for (let i = 0; i < pathUV.length; i++) {
       const uv = pathUV[i];
-      const world = letterUVToLocal(uv.x, uv.y, letterEl).applyMatrix4(letterObj.matrixWorld);
-      const ndc = world.clone().project(threeCam);
+      // Fresh Vector3 each point — avoid reusing a mutated vector across project() calls
+      const local = letterUVToLocal(uv.x, uv.y, letterEl);
+      const world = local.applyMatrix4(letterObj.matrixWorld);
+      const ndc = world.project(threeCam);
       if (ndc.z < -1 || ndc.z > 1) continue;
       projected.push({ x: (ndc.x + 1) / 2, y: (-ndc.y + 1) / 2 });
     }
@@ -460,6 +502,7 @@
     ctx.clearRect(0, 0, canvasEl.width, canvasEl.height);
 
     const pathIsDefault = global.ARLetters ? global.ARLetters.currentPathIsDefault : true;
+    const pathUV = global.ARLetters ? global.ARLetters.currentTargetPathUV : [];
     const activePath = lastViewportPath;
     projectedScreenPath = activePath;
 
@@ -475,7 +518,9 @@
       minDist: null,
       nextWaypoint: nextWaypointIdx,
       pathLength: activePath.length,
-      projectedPts: activePath.length
+      projectedPts: activePath.length,
+      uvPts: pathUV.length,
+      letterFile: global.ARLetters ? global.ARLetters.currentLetterFilename : '?'
     };
 
     if (activePath.length > 0) {
@@ -574,14 +619,6 @@
     }
 
     if (global.ARDebug) {
-      if (global.ARDebug.DEBUG && global.ARDebug.logProjectionDebug) {
-        global.ARDebug.logProjectionDebug([
-          'space: viewport (matches AR compositor)',
-          'pathPts: ' + activePath.length,
-          'viewport: ' + vp.w + '×' + vp.h,
-          'cameraImg: ' + (imageSize ? imageSize.w + '×' + imageSize.h : 'n/a')
-        ]);
-      }
       global.ARDebug.updatePenDebugPanel(debugState, {
         penTracking: isPenTracking,
         getCameraImageStatus: lastGetCameraImageStatus,
@@ -589,7 +626,11 @@
         xrFeedDisabled: xrCameraFeedDisabled,
         zoom: global.ARPlacement ? global.ARPlacement.currentZoom : 1,
         defaultPath: pathIsDefault,
-        letterOps: global.ARDebug.letterOpSummary ? global.ARDebug.letterOpSummary() : ''
+        letterOps: global.ARDebug.letterOpSummary
+          ? (global.ARDebug.letterOpSummary() || '(none yet)')
+          : '(n/a)',
+        viewport: vp.w + '×' + vp.h,
+        cameraImg: imageSize ? imageSize.w + '×' + imageSize.h : 'n/a'
       });
     }
   }

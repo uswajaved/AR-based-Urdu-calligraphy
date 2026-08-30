@@ -75,8 +75,18 @@
     extras = extras || {};
     panelEl.style.display = 'block';
     panelEl.setAttribute('aria-hidden', 'false');
+
+    const letterOpsLine = extras.letterOps != null
+      ? String(extras.letterOps)
+      : (letterOpSummary() || '(none yet)');
+
     panelEl.textContent =
       'debug=1\n' +
+      'letterFile: ' + (state.letterFile || '?') + '\n' +
+      'uvPts: ' + (state.uvPts != null ? state.uvPts : '?') +
+      '  pathPts: ' + (state.projectedPts != null ? state.projectedPts : '?') + '\n' +
+      'letterOps: ' + letterOpsLine + '\n' +
+      '---\n' +
       'penTracking: ' + (extras.penTracking ? 'on' : 'off') + '\n' +
       'feed: ' + (state.feedSource || 'none') + '\n' +
       'getCameraImage: ' + (extras.getCameraImageStatus || 'n/a') + '\n' +
@@ -85,20 +95,18 @@
       'hand: ' + (state.handDetected ? 'yes' : 'no') + '\n' +
       'pen: ' + (state.penX != null ? state.penX.toFixed(3) + ', ' + state.penY.toFixed(3) : 'n/a') + '\n' +
       (state.rawTipX != null
-        ? 'rawTip: ' + state.rawTipX.toFixed(3) + ', ' + state.rawTipY.toFixed(3) +
-          ' ext: ' + state.rawPenX.toFixed(3) + ', ' + state.rawPenY.toFixed(3) +
-          ' mirX: ' + state.mirrorTipX.toFixed(3) + '\n'
+        ? 'rawTip: ' + state.rawTipX.toFixed(3) + ', ' + state.rawTipY.toFixed(3) + '\n'
         : '') +
       'onPath: ' + (state.isOnPath ? 'yes' : 'no') + '\n' +
       'dist: ' + (state.minDist != null ? state.minDist.toFixed(3) : 'n/a') + '\n' +
       'waypoint: ' + state.nextWaypoint + '/' + state.pathLength + '\n' +
-      'projectedPts: ' + state.projectedPts + '\n' +
       'zoom: ' + (extras.zoom != null ? Number(extras.zoom).toFixed(1) : 'n/a') + '\n' +
       'defaultPath: ' + (extras.defaultPath ? 'yes' : 'no') +
-      (extras.letterOps ? '\nletterOps: ' + extras.letterOps : '') +
+      (extras.viewport ? '\nvp: ' + extras.viewport : '') +
+      (extras.cameraImg ? '\ncamImg: ' + extras.cameraImg : '') +
       (projectionDebugLines.length ? '\n--- proj ---\n' + projectionDebugLines.join('\n') : '') +
-      (recentCaptureLines.length ? '\n---\n' + recentCaptureLines.join('\n') : '') +
-      (onceMessages.length ? '\n---\n' + onceMessages.join('\n') : '');
+      (recentCaptureLines.length ? '\n--- capture ---\n' + recentCaptureLines.join('\n') : '') +
+      (onceMessages.length ? '\n--- once ---\n' + onceMessages.join('\n') : '');
   }
 
   global.ARDebug = {
@@ -118,10 +126,10 @@
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', function () {
       initDebugPanel();
-      if (DEBUG) showPanel('Debug on — add hand after placing letter');
+      if (DEBUG) showPanel('Debug on — place letter to see pathPts/letterOps');
     });
   } else {
     initDebugPanel();
-    if (DEBUG) showPanel('Debug on — add hand after placing letter');
+    if (DEBUG) showPanel('Debug on — place letter to see pathPts/letterOps');
   }
 })(window);
